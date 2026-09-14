@@ -1,7 +1,7 @@
 /* Vision-IA · service worker — Studio Niko Design
    index.html en réseau d'abord : une mise en ligne ne reste pas
    prisonnière du cache. Le reste en cache d'abord. */
-var VERSION = 'vision-ia-v3';
+var VERSION = 'vision-ia-v4';
 var COQUILLE = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', function(e){
