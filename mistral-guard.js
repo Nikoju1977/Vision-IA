@@ -1,4 +1,4 @@
-/* Vision-IA · garde Mistral v1.3
+/* Vision-IA · garde Mistral v1.3.1
    Charge après index.html. Ne modifie que le transport Mistral.
    Objectifs : éviter les rafales, sérialiser les départs et appliquer
    un backoff exponentiel avec jitter sur 429/5xx. */
@@ -9,7 +9,7 @@
      typeof window.xhrJson !== 'function' ||
      typeof window.xhrFlux !== 'function') return;
 
-  window.__visionIaMistralGuard = '1.3.0';
+  window.__visionIaMistralGuard = '1.3.1';
 
   var p = window.PROVIDERS.mistral;
   p.cadence = Math.max(Number(p.cadence) || 0, 1800);
@@ -45,12 +45,15 @@
     if(!err || !(err.code === 429 || err.code >= 500)) return err;
 
     etat.echecsConsecutifs++;
-    var secondes = Number(err.attendre) || 0;
+    var secondes = Number(err.attendre) || 0;   /* Retry-After reste prioritaire */
     if(!(secondes > 0)) secondes = delaiSecours();
     secondes = Math.min(90, Math.max(1, secondes));
 
-    err.attendre = secondes;
+    /* On n'écrase plus err.attendre : chaine() et avecReprise() le liraient
+       et referaient un patienter() par-dessus notre refroidissement.
+       Le drapeau leur dit que l'attente est déjà portée ici, une seule fois. */
     etat.bloqueJusqua = Math.max(etat.bloqueJusqua, Date.now() + secondes * 1000);
+    err.gardeMistral = secondes;
     return err;
   }
 
