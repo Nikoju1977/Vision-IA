@@ -531,10 +531,13 @@ var ACCUEIL =
 "Donnez-moi le pitch, ou à défaut le genre : c'est de là que part tout le reste. Une ligne suffit pour commencer.";
 
 var PROVIDERS = {
-  groq:     { nom:'Groq',     url:'https://api.groq.com/openai/v1/chat/completions', cle:'vai_k_groq',     modele:'llama-3.3-70b-versatile' },
-  cerebras: { nom:'Cerebras', url:'https://api.cerebras.ai/v1/chat/completions',     cle:'vai_k_cerebras', modele:'llama-3.3-70b' },
-  mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest' }
+  groq:     { nom:'Groq',     url:'https://api.groq.com/openai/v1/chat/completions', cle:'vai_k_groq',     modele:'llama-3.3-70b-versatile', cadence:2100 },
+  cerebras: { nom:'Cerebras', url:'https://api.cerebras.ai/v1/chat/completions',     cle:'vai_k_cerebras', modele:'llama-3.3-70b',           cadence:1200 },
+  mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest',    cadence:1400 }
 };
+/* Mistral gratuit plafonne à une requête par seconde : on espace nous-mêmes
+   les appels plutôt que d'encaisser un 429 puis de courir après. */
+var dernierAppel = {};
 var ORDRE = ['groq','cerebras','mistral'];
 var VISION = { url:'https://api.mistral.ai/v1/chat/completions', cle:'vai_k_mistral', modele:'pixtral-12b-2409' };
 var STOCK = 'vai_projet_v1';
@@ -613,8 +616,9 @@ function xhrJson(url, corps, entetes, delai){
       } else {
         var d = '';
         try { d = (JSON.parse(x.responseText).error || {}).message || ''; } catch(e){}
-        var err = new Error('HTTP ' + x.status + (d ? ' · ' + d : ''));
+        var err = new Error(libelleHttp(x.status, d));
         err.code = x.status;
+        err.attendre = secondesAvantReprise(x);
         rejeter(err);
       }
     };
@@ -625,26 +629,83 @@ function xhrJson(url, corps, entetes, delai){
   });
 }
 
+function patienter(ms){ return new Promise(function(ok){ setTimeout(ok, ms); }); }
+
+function secondesAvantReprise(x){
+  var v = '';
+  try { v = x.getResponseHeader('retry-after') || x.getResponseHeader('x-ratelimit-reset-requests') || ''; } catch(e){}
+  var s = parseFloat(String(v).replace(/[^\d.]/g,''));
+  if(!isNaN(s) && s > 0) return Math.min(s, 90);
+  return 0;
+}
+
+function libelleHttp(code, detail){
+  if(code === 429) return 'Quota atteint (429)' + (detail ? ' · ' + detail : '');
+  if(code === 401 || code === 403) return 'Clé refusée (' + code + ')' + (detail ? ' · ' + detail : '');
+  if(code >= 500) return 'Moteur indisponible (' + code + ')';
+  return 'HTTP ' + code + (detail ? ' · ' + detail : '');
+}
+
+/* Respecte la cadence du fournisseur avant de frapper à sa porte. */
+function tourDeRole(p){
+  var d = dernierAppel[p.url] || 0;
+  var reste = (p.cadence || 0) - (Date.now() - d);
+  dernierAppel[p.url] = Date.now() + Math.max(0, reste);
+  return reste > 0 ? patienter(reste) : Promise.resolve();
+}
+
+/* Pour les appels qui ne passent pas par la chaîne (vision) :
+   même patience face à un 429, mais sans repli possible. */
+function avecReprise(p, tenter){
+  var ATTENTES = [3, 9, 20];
+  function essai(n){
+    return tourDeRole(p).then(tenter).catch(function(e){
+      if(e && e.coupe) throw e;
+      if((e.code === 429 || e.code >= 500) && n < ATTENTES.length){
+        var s = e.attendre || ATTENTES[n];
+        service(p.nom + ' sature, reprise dans ' + Math.round(s) + ' s.');
+        dernierAppel[p.url] = Date.now() + s * 1000;
+        return patienter(s * 1000).then(function(){ return essai(n + 1); });
+      }
+      throw e;
+    });
+  }
+  return essai(0);
+}
+
 /* Un seul parcours de la chaîne pour les deux modes : ce qui
-   diverge finit toujours par diverger en bug. */
+   diverge finit toujours par diverger en bug.
+   Un 429 n'est pas une panne du moteur mais une file d'attente :
+   on patiente et on réessaie le même, on ne le disqualifie pas. */
 function chaine(tenter){
   var dispo = cles();
   if(!dispo.length) return Promise.reject(new Error('Aucune clé enregistrée. Ouvrez les Réglages.'));
   var i = 0, dernier = null;
-  function essai(){
+  function essai(reprises){
     if(i >= dispo.length) return Promise.reject(dernier || new Error('Tous les moteurs ont refusé.'));
-    var p = PROVIDERS[dispo[i].id];
-    return tenter(p, dispo[i].k).then(function(t){
+    var p = PROVIDERS[dispo[i].id], k = dispo[i].k;
+    /* S'il reste un moteur libre derrière, on ne s'acharne pas : une reprise
+       courte, puis on bascule. C'est seulement sur le dernier qu'on patiente. */
+    var ATTENTES = (dispo.length - 1 - i) > 0 ? [2] : [3, 9, 20];
+    return tourDeRole(p).then(function(){ return tenter(p, k); }).then(function(t){
       if(!t) throw new Error('Réponse vide.');
       return { texte:t, moteur:p.nom };
     }).catch(function(e){
-      if(e && e.coupe) throw e;          /* couper ne doit pas déclencher la bascule */
-      dernier = e; i++;
+      if(e && e.coupe) throw e;                 /* couper ne bascule pas */
+      dernier = e;
+      var saturable = e && (e.code === 429 || e.code >= 500);
+      if(saturable && reprises < ATTENTES.length){
+        var s = e.attendre || ATTENTES[reprises];
+        service(p.nom + ' sature, reprise dans ' + Math.round(s) + ' s.');
+        dernierAppel[p.url] = Date.now() + s * 1000;
+        return patienter(s * 1000).then(function(){ return essai(reprises + 1); });
+      }
+      i++;
       if(i < dispo.length) service('Bascule sur ' + PROVIDERS[dispo[i].id].nom + '.');
-      return essai();
+      return essai(0);
     });
   }
-  return essai();
+  return essai(0);
 }
 
 function demander(messages, temperature, maxJetons){
@@ -698,8 +759,9 @@ function xhrFlux(url, corps, entetes, onMorceau, delai){
       } else {
         var d = '';
         try { d = (JSON.parse(x.responseText).error || {}).message || ''; } catch(e){}
-        var err = new Error('HTTP ' + x.status + (d ? ' · ' + d : ''));
+        var err = new Error(libelleHttp(x.status, d));
         err.code = x.status;
+        err.attendre = secondesAvantReprise(x);
         ko(err);
       }
     };
@@ -710,8 +772,6 @@ function xhrFlux(url, corps, entetes, onMorceau, delai){
     x.send(JSON.stringify(corps));
   });
 }
-
-function patienter(ms){ return new Promise(function(ok){ setTimeout(ok, ms); }); }
 
 function demanderFlux(messages, temperature, maxJetons, onMorceau){
   return chaine(function(p, k){
@@ -977,7 +1037,7 @@ function depouiller(i){
   if(n) service('Reprise du dépouillement à la tranche ' + (n+1) + '.');
   moteur(true, 'Dépouillement', p.nom + ' — tranche ' + (n+1) + ' sur ' + lots.length);
 
-  function tranche(essais){
+  function tranche(){
     if(n >= lots.length) return Promise.resolve();
     $('tirage-detail').textContent = p.nom + ' — tranche ' + (n+1) + ' sur ' + lots.length;
     var quoi = p.genre === 'scenario'
@@ -990,19 +1050,11 @@ function depouiller(i){
       p.fiches.push('[' + (n+1) + '/' + lots.length + '] ' + r.texte.trim());
       n++;
       sauver();                          /* chaque fiche est acquise */
-      return patienter(2200).then(function(){ return tranche(0); });  /* cadence : sous les 30 req/min de Groq */
-    }).catch(function(e){
-      var quota = /429|rate|quota|limit/i.test(e.message || '');
-      if(quota && (essais || 0) < 4){
-        var pause = 12000 * ((essais || 0) + 1);
-        $('tirage-detail').textContent = 'Quota atteint — reprise dans ' + Math.round(pause/1000) + ' s';
-        return patienter(pause).then(function(){ return tranche((essais || 0) + 1); });
-      }
-      throw e;
+      return tranche();                  /* la cadence est tenue par tourDeRole() */
     });
   }
 
-  tranche(0).then(function(){
+  tranche().then(function(){
     $('tirage-titre').textContent = 'Synthèse';
     $('tirage-detail').textContent = p.fiches.length + ' tranches à recoudre';
     return demander([
@@ -1020,7 +1072,8 @@ function depouiller(i){
     service('« ' + p.nom + ' » dépouillé — la note de lecture entre dans le contexte.');
   }).catch(function(e){
     sauver(); rendrePieces(); moteur(false);
-    service(e.message + ' — les ' + p.fiches.length + ' fiches déjà faites sont gardées, relancez pour reprendre.', true);
+    service((e && e.coupe ? 'Dépouillement coupé' : e.message) +
+      ' — les ' + p.fiches.length + ' fiches déjà faites sont gardées, relancez pour reprendre.', !(e && e.coupe));
   });
 }
 
@@ -1047,6 +1100,7 @@ function verserImage(f){
   if(!kMistral){ service('Le repérage se lit avec Mistral : ajoutez cette clé dans les Réglages.', true); return; }
 
   moteur(true, 'Lecture du repérage', f.name);
+  var pixtral = { url: VISION.url, cadence: 1400, nom: 'Pixtral' };
   lireDataUrl(f).then(function(brut){
     return reduireImage(brut, 1280).then(function(grand){
       return reduireImage(brut, 160).then(function(vignette){
@@ -1054,7 +1108,7 @@ function verserImage(f){
       });
     });
   }).then(function(img){
-    return xhrJson(VISION.url, {
+    return avecReprise(pixtral, function(){ return xhrJson(VISION.url, {
       model: VISION.modele,
       max_tokens: 900,
       temperature: 0.5,
@@ -1069,7 +1123,7 @@ function verserImage(f){
           { type:'image_url', image_url: img.grand }
         ]}
       ]
-    }, { Authorization: 'Bearer ' + kMistral }, 120000).then(function(r){
+    }, { Authorization: 'Bearer ' + kMistral }, 120000); }).then(function(r){
       var t = r && r.choices && r.choices[0] && r.choices[0].message ? r.choices[0].message.content : '';
       if(!t) throw new Error('Le modèle n\'a rien vu.');
       etat.pieces.push({
