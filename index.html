@@ -455,6 +455,11 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
       <input id="k-phrase" type="password" autocomplete="new-password" spellcheck="false" placeholder="8 signes minimum">
     </div>
     <div class="cle">
+      <label for="k-plafond">Plafond de jetons par minute</label>
+      <small>Mistral limite les requêtes/seconde <em>et</em> les jetons/minute, sans publier les seuils du palier gratuit : relevez le vôtre dans Mistral AI Studio → Limits. 0 laisse le plafond désarmé.</small>
+      <input id="k-plafond" type="number" min="0" step="1000" inputmode="numeric" placeholder="0">
+    </div>
+    <div class="cle">
       <label for="k-groq">Groq</label>
       <small>Llama 3.3 70B — rapide, généreux en quota.</small>
       <input id="k-groq" type="password" placeholder="gsk_…" autocomplete="off" spellcheck="false">
@@ -559,7 +564,9 @@ var PROVIDERS = {
 };
 /* Mistral gratuit plafonne à une requête par seconde : on espace nous-mêmes
    les appels plutôt que d'encaisser un 429 puis de courir après. */
-var dernierAppel = {};
+var CADENCE_ETAT = 'vai_cadence_v1';
+var PLAFOND_CLE = 'vai_plafond_jetons';
+var FENETRE_JETONS = 60000;
 var ORDRE = ['groq','cerebras','mistral'];
 var VISION = { url:'https://api.mistral.ai/v1/chat/completions', cle:'vai_k_mistral', modele:'pixtral-12b-2409' };
 var STOCK = 'vai_projet_v1';
@@ -769,12 +776,90 @@ function libelleHttp(code, detail){
   return 'HTTP ' + code + (detail ? ' · ' + detail : '');
 }
 
-/* Respecte la cadence du fournisseur avant de frapper à sa porte. */
+/* ── Cadence partagée entre onglets ──────────────────────────
+   Web Locks sérialise les départs : deux onglets ouverts sur
+   Vision-IA ne peuvent plus doubler la cadence d'un fournisseur.
+   L'échéance de refroidissement transite par le stockage, donc un
+   429 pris dans un onglet freine aussi les autres. */
+function pisteVide(){ return { depart:0, bloque:0, echecs:0, jetons:[] }; }
+
+function cadenceLire(){
+  try { return JSON.parse(safeStorage.getItem(CADENCE_ETAT) || '{}') || {}; }
+  catch(e){ return {}; }
+}
+function cadenceEcrire(o){
+  try { safeStorage.setItem(CADENCE_ETAT, JSON.stringify(o)); } catch(e){}
+}
+function piste(o, url){ return o[url] || (o[url] = pisteVide()); }
+
+function plafondJetons(){
+  var n = parseInt(safeStorage.getItem(PLAFOND_CLE) || '0', 10);
+  return isNaN(n) || n < 0 ? 0 : n;
+}
+
+/* Fenêtre glissante d'une minute : on élague et on totalise. */
+function jetonsRecents(pi, maintenant){
+  pi.jetons = (pi.jetons || []).filter(function(j){ return maintenant - j[0] < FENETRE_JETONS; });
+  var n = 0;
+  for(var i=0;i<pi.jetons.length;i++) n += pi.jetons[i][1];
+  return n;
+}
+
+function noterJetons(url, n){
+  if(!(n > 0)) return;
+  var o = cadenceLire(), pi = piste(o, url);
+  pi.jetons = pi.jetons || [];
+  pi.jetons.push([Date.now(), n]);
+  jetonsRecents(pi, Date.now());
+  cadenceEcrire(o);
+}
+
+function avecVerrou(nom, travail){
+  if(navigator.locks && navigator.locks.request){
+    try { return navigator.locks.request(nom, travail); } catch(e){}
+  }
+  return Promise.resolve().then(travail);   /* pas de Web Locks : file de cet onglet seulement */
+}
+
+/* Respecte la cadence du fournisseur avant de frapper à sa porte.
+   Le verrou est tenu pendant l'attente : c'est ce qui fait la file. */
 function tourDeRole(p){
-  var d = dernierAppel[p.url] || 0;
-  var reste = (p.cadence || 0) - (Date.now() - d);
-  dernierAppel[p.url] = Date.now() + Math.max(0, reste);
-  return reste > 0 ? patienter(reste) : Promise.resolve();
+  return avecVerrou('vai-cadence-' + p.url, function(){
+    var o = cadenceLire(), pi = piste(o, p.url);
+    var maintenant = Date.now();
+    var cible = Math.max(pi.bloque || 0, (pi.depart || 0) + (p.cadence || 0));
+
+    var plafond = plafondJetons();
+    if(plafond > 0){
+      var consommes = jetonsRecents(pi, maintenant);
+      if(consommes >= plafond && pi.jetons.length){
+        /* On attend que la plus vieille consommation sorte de la fenêtre. */
+        cible = Math.max(cible, pi.jetons[0][0] + FENETRE_JETONS);
+      }
+    }
+
+    var ms = Math.max(0, cible - maintenant);
+    pi.depart = maintenant + ms;
+    cadenceEcrire(o);
+    return patienter(ms);
+  });
+}
+
+/* Un 429 ou un 5xx arme le refroidissement, partagé lui aussi.
+   Retry-After reste prioritaire ; sinon backoff exponentiel avec jitter. */
+function penaliser(p, secondes){
+  var o = cadenceLire(), pi = piste(o, p.url);
+  pi.echecs = (pi.echecs || 0) + 1;
+  var s = Number(secondes) || 0;
+  if(!(s > 0)) s = Math.min(30, Math.pow(2, Math.max(1, pi.echecs))) + Math.random();
+  s = Math.min(90, Math.max(1, s));
+  pi.bloque = Math.max(pi.bloque || 0, Date.now() + s * 1000);
+  cadenceEcrire(o);
+  return s;
+}
+function apaiser(p){
+  var o = cadenceLire();
+  if(o[p.url] && o[p.url].echecs){ o[p.url].echecs = 0; cadenceEcrire(o); }
 }
 
 /* Pour les appels qui ne passent pas par la chaîne (vision) :
@@ -782,19 +867,14 @@ function tourDeRole(p){
 function avecReprise(p, tenter){
   var ATTENTES = [3, 9, 20];
   function essai(n){
-    return tourDeRole(p).then(tenter).catch(function(e){
+    return tourDeRole(p).then(tenter).then(function(v){ apaiser(p); return v; }).catch(function(e){
       if(e && e.coupe) throw e;
       if((e.code === 429 || e.code >= 500) && n < ATTENTES.length){
-        /* Si le garde Mistral a déjà armé son refroidissement, il porte seul
-           l'attente : retemporiser ici la compterait deux fois. */
-        if(e.gardeMistral){
-          service(p.nom + ' sature, reprise dans ' + Math.round(e.gardeMistral) + ' s.');
-          return essai(n + 1);
-        }
-        var s = e.attendre || ATTENTES[n];
+        /* L'attente est portée par le refroidissement partagé : tourDeRole()
+           la fera respecter, ici comme dans les autres onglets. */
+        var s = penaliser(p, e.attendre || ATTENTES[n]);
         service(p.nom + ' sature, reprise dans ' + Math.round(s) + ' s.');
-        dernierAppel[p.url] = Date.now() + s * 1000;
-        return patienter(s * 1000).then(function(){ return essai(n + 1); });
+        return essai(n + 1);
       }
       throw e;
     });
@@ -818,20 +898,16 @@ function chaine(tenter){
     var ATTENTES = (dispo.length - 1 - i) > 0 ? [2] : [3, 9, 20];
     return tourDeRole(p).then(function(){ return tenter(p, k); }).then(function(t){
       if(!t) throw new Error('Réponse vide.');
+      apaiser(p);
       return { texte:t, moteur:p.nom };
     }).catch(function(e){
       if(e && e.coupe) throw e;                 /* couper ne bascule pas */
       dernier = e;
       var saturable = e && (e.code === 429 || e.code >= 500);
       if(saturable && reprises < ATTENTES.length){
-        if(e.gardeMistral){
-          service(p.nom + ' sature, reprise dans ' + Math.round(e.gardeMistral) + ' s.');
-          return essai(reprises + 1);
-        }
-        var s = e.attendre || ATTENTES[reprises];
+        var s = penaliser(p, e.attendre || ATTENTES[reprises]);
         service(p.nom + ' sature, reprise dans ' + Math.round(s) + ' s.');
-        dernierAppel[p.url] = Date.now() + s * 1000;
-        return patienter(s * 1000).then(function(){ return essai(reprises + 1); });
+        return essai(reprises + 1);
       }
       i++;
       if(i < dispo.length) service('Bascule sur ' + PROVIDERS[dispo[i].id].nom + '.');
@@ -848,13 +924,14 @@ function demander(messages, temperature, maxJetons){
       temperature: (temperature == null ? 0.7 : temperature),
       max_tokens: maxJetons || 2400
     }, { Authorization: 'Bearer ' + k }).then(function(r){
+      if(r && r.usage) noterJetons(p.url, r.usage.total_tokens);
       return r && r.choices && r.choices[0] && r.choices[0].message ? r.choices[0].message.content : '';
     });
   });
 }
 
 /* ── Flux SSE en XHR : le texte s'écrit pendant qu'il arrive ── */
-function xhrFlux(url, corps, entetes, onMorceau, delai){
+function xhrFlux(url, corps, entetes, onMorceau, delai, pisteUrl){
   return new Promise(function(ok, ko){
     var x = new XMLHttpRequest();
     x.open('POST', url, true);
@@ -877,6 +954,7 @@ function xhrFlux(url, corps, entetes, onMorceau, delai){
         if(charge === '[DONE]'){ fini = true; continue; }
         try {
           var o = JSON.parse(charge);
+          if(o.usage && pisteUrl) noterJetons(pisteUrl, o.usage.total_tokens);
           var d = o.choices && o.choices[0] && (o.choices[0].delta || o.choices[0].message);
           if(d && d.content){ texte += d.content; if(onMorceau) onMorceau(texte); }
         } catch(e){}
@@ -910,9 +988,11 @@ function demanderFlux(messages, temperature, maxJetons, onMorceau){
   return chaine(function(p, k){
     return xhrFlux(p.url, {
       model: p.modele, messages: messages, stream: true,
+      /* Sans include_usage, aucun décompte de jetons ne revient en flux. */
+      stream_options: { include_usage: true },
       temperature: (temperature == null ? 0.7 : temperature),
       max_tokens: maxJetons || 2400
-    }, { Authorization: 'Bearer ' + k }, onMorceau || null, 180000);
+    }, { Authorization: 'Bearer ' + k }, onMorceau || null, 180000, p.url);
   });
 }
 
@@ -1957,6 +2037,7 @@ function demarrer(){
 
   $('b-reglages').addEventListener('click', function(){
     ORDRE.forEach(function(id){ $('k-' + id).value = trousseau.lire(id); });
+    $('k-plafond').value = plafondJetons() || '';
     $('k-phrase').value = '';
     majEtatCoffre();
     $('f-consigne').value = etat.consigne;
@@ -1985,6 +2066,8 @@ function demarrer(){
 
   $('b-enregistrer').addEventListener('click', function(){
     ORDRE.forEach(function(id){ trousseau.poser(id, sanitizeKey($('k-' + id).value)); });
+    var plaf = parseInt($('k-plafond').value, 10);
+    safeStorage.setItem(PLAFOND_CLE, (isNaN(plaf) || plaf < 0) ? 0 : plaf);
     etat.consigne = $('f-consigne').value.trim() || CONSIGNE_PAR_DEFAUT;
     sauver(); majVoyant();
 
@@ -2108,6 +2191,5 @@ function demarrer(){
 
 demarrer();
 </script>
-<script src="./mistral-guard.js"></script>
 </body>
 </html>
