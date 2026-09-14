@@ -1,0 +1,1738 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Vision-IA — agent autonome réalisateur de cinéma : note d'intention, découpage technique, direction artistique, production.">
+<meta name="theme-color" content="#10161c">
+<title>Vision-IA · Réalisateur agentique</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+
+<script>
+/* ── Studio Niko · helpers ─────────────────────────────────── */
+window.safeStorage = window.safeStorage || (function(){
+  var mem = new Map(), ls = null;
+  try { ls = window.localStorage; var t='__niko__'; ls.setItem(t,'1'); ls.removeItem(t); } catch(e){ ls = null; }
+  return {
+    getItem:function(k){ try{ return ls ? ls.getItem(k) : (mem.has(k)?mem.get(k):null); }catch(e){ return mem.has(k)?mem.get(k):null; } },
+    setItem:function(k,v){ try{ if(ls){ ls.setItem(k,String(v)); return; } }catch(e){} mem.set(k,String(v)); },
+    removeItem:function(k){ try{ if(ls) ls.removeItem(k); }catch(e){} mem.delete(k); }
+  };
+})();
+</script>
+
+<style>
+:root{
+  --plateau:#10161c;      /* nuit de plateau */
+  --console:#18212a;      /* flancs de console */
+  --trait:#2b3843;        /* rainures */
+  --encre:#e4e9ed;        /* texte console */
+  --sourdine:#8798a5;     /* texte secondaire */
+  --tally:#d0342c;        /* voyant caméra */
+  --tungstene:#e8a33d;    /* lumière chaude */
+  --page:#f2efe6;         /* papier de scénario */
+  --page-encre:#1b1b18;
+  --ombre:0 18px 40px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--plateau);
+  color:var(--encre);
+  font-family:'Courier Prime',ui-monospace,monospace;
+  font-size:15px;line-height:1.55;
+  min-height:100dvh;
+  padding:env(safe-area-inset-top,0) env(safe-area-inset-right,0) env(safe-area-inset-bottom,0) env(safe-area-inset-left,0);
+  -webkit-text-size-adjust:100%;
+}
+h1,h2,h3,.bebas{font-family:'Bebas Neue',Impact,sans-serif;font-weight:400;letter-spacing:.06em}
+button,input,select,textarea{font-family:inherit;font-size:16px}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--tungstene);outline-offset:2px}
+
+/* ── La claquette : en-tête et console de projet ─────────── */
+.clap{background:var(--console);border-bottom:1px solid var(--trait)}
+.clap-bras{
+  height:26px;
+  background:repeating-linear-gradient(115deg,#0d0d0d 0 26px,var(--page) 26px 52px);
+  border-bottom:2px solid #000;
+}
+.clap-corps{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:start;padding:12px 16px}
+.clap-champs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 14px;max-width:640px;flex:1}
+.champ{display:flex;flex-direction:column;gap:2px;min-width:0}
+.champ span{font-family:'Bebas Neue',sans-serif;font-size:13px;color:var(--sourdine);letter-spacing:.14em}
+.champ input,.champ select{
+  background:transparent;border:0;border-bottom:1px solid var(--trait);
+  color:var(--encre);padding:4px 0;width:100%;
+}
+.champ input:focus,.champ select:focus{border-bottom-color:var(--tungstene);outline:none}
+.champ select option{background:var(--console);color:var(--encre)}
+.clap-cote{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.tally{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--sourdine);white-space:nowrap}
+.voyant{width:9px;height:9px;border-radius:50%;background:#3d4a55;flex:none}
+.voyant.on{background:var(--tally);box-shadow:0 0 9px var(--tally)}
+.lien{background:none;border:1px solid var(--trait);color:var(--sourdine);padding:6px 11px;border-radius:2px;font-size:13px}
+.lien:hover{border-color:var(--tungstene);color:var(--encre)}
+
+/* ── Le plan de travail : les 6 phases ───────────────────── */
+.phases{display:flex;gap:0;overflow-x:auto;background:#0c1217;border-bottom:1px solid var(--trait);scrollbar-width:none}
+.phases::-webkit-scrollbar{display:none}
+.phase{
+  flex:none;background:none;border:0;border-bottom:2px solid transparent;
+  color:var(--sourdine);padding:11px 15px;display:flex;align-items:baseline;gap:7px;white-space:nowrap;
+}
+.phase b{font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:.05em;font-weight:400}
+.phase i{font-style:normal;font-size:11px;color:#4d5d69}
+.phase[aria-selected="true"]{color:var(--encre);border-bottom-color:var(--tally);background:#131c23}
+.phase.fait i{color:var(--tungstene)}
+
+main{max-width:960px;margin:0 auto;padding:18px 16px 90px}
+.vue{display:none}
+.vue.active{display:block}
+.titre-vue{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 4px}
+.titre-vue h2{font-size:30px;margin:0;color:var(--encre)}
+.chapeau{color:var(--sourdine);font-size:13px;margin:0 0 18px;max-width:62ch}
+
+/* ── Le papier : sorties rédigées ────────────────────────── */
+.papier{
+  background:var(--page);color:var(--page-encre);padding:26px 22px;
+  box-shadow:var(--ombre);white-space:pre-wrap;word-wrap:break-word;
+  min-height:120px;font-size:14.5px;line-height:1.75;
+}
+.papier:empty::before{content:"Rien de tiré pour l'instant.";color:#8b8778}
+.papier h3{font-size:22px;margin:20px 0 6px}
+.papier strong{font-weight:700}
+
+/* ── Boutons d'action ────────────────────────────────────── */
+.barre{display:flex;gap:9px;flex-wrap:wrap;margin:0 0 16px}
+.btn{
+  background:var(--tally);color:#fff;border:0;padding:11px 17px;border-radius:2px;
+  font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:.07em;
+}
+.btn:hover:not(:disabled){filter:brightness(1.12)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.creux{background:transparent;border:1px solid var(--trait);color:var(--encre)}
+.btn.creux:hover:not(:disabled){border-color:var(--tungstene)}
+
+/* ── Le plateau : dialogue avec l'agent ──────────────────── */
+.fil{display:flex;flex-direction:column;gap:14px;margin-bottom:16px}
+.tour{max-width:min(100%,68ch)}
+.tour .qui{font-family:'Bebas Neue',sans-serif;font-size:14px;letter-spacing:.14em;color:var(--sourdine);margin-bottom:3px}
+.tour .dit{white-space:pre-wrap;word-wrap:break-word}
+.tour.real .qui{color:var(--tally)}
+.tour.real .dit{border-left:2px solid var(--tally);padding-left:12px}
+.tour.prod{align-self:flex-end;text-align:right}
+.tour.prod .dit{background:var(--console);padding:9px 13px;border-radius:2px;text-align:left}
+.saisie{display:flex;gap:9px;align-items:flex-end}
+.saisie textarea{
+  flex:1;background:var(--console);border:1px solid var(--trait);color:var(--encre);
+  padding:11px;border-radius:2px;resize:vertical;min-height:60px;
+}
+.saisie textarea:focus{border-color:var(--tungstene);outline:none}
+
+/* ── Le classeur : documents et repérages versés au film ── */
+.classeur{border:1px solid var(--trait);border-radius:2px;margin-bottom:18px;background:#0e151b}
+.classeur-tete{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 13px;flex-wrap:wrap}
+.classeur-tete b{font-family:'Bebas Neue',sans-serif;font-size:17px;letter-spacing:.06em;font-weight:400}
+.classeur-tete .compte{color:var(--sourdine);font-size:12px}
+.classeur-actions{display:flex;gap:8px;flex-wrap:wrap}
+.mini{background:transparent;border:1px solid var(--trait);color:var(--encre);padding:7px 12px;border-radius:2px;font-size:13px}
+.mini:hover:not(:disabled){border-color:var(--tungstene)}
+.mini:disabled{opacity:.45;cursor:not-allowed}
+.pieces{list-style:none;margin:0;padding:0;border-top:1px solid var(--trait)}
+.pieces:empty{display:none}
+.pieces li{display:flex;align-items:flex-start;gap:11px;padding:10px 13px;border-bottom:1px solid #1d2831}
+.pieces li:last-child{border-bottom:0}
+.pieces .vignette{width:44px;height:44px;flex:none;border:1px solid var(--trait);object-fit:cover;background:#0a1015}
+.pieces .marque{
+  width:44px;height:44px;flex:none;border:1px solid var(--trait);display:flex;align-items:center;justify-content:center;
+  font-family:'Bebas Neue',sans-serif;font-size:14px;color:var(--sourdine);letter-spacing:.05em;
+}
+.pieces .quoi{flex:1;min-width:0}
+.pieces .quoi b{display:block;font-weight:400;word-break:break-word;font-size:13.5px}
+.pieces .quoi span{color:var(--sourdine);font-size:11.5px;display:block;margin-top:2px}
+.pieces .quoi p{margin:6px 0 0;font-size:12.5px;color:#aab8c2;max-height:4.6em;overflow:hidden}
+.pieces .retirer{background:none;border:0;color:var(--sourdine);font-size:20px;line-height:1;padding:2px 6px}
+.pieces .retirer:hover{color:var(--tally)}
+.zone-depot.survol{border-color:var(--tungstene);background:#131f27}
+
+/* ── Le découpage : tableau des plans ────────────────────── */
+.table-enveloppe{overflow-x:auto;box-shadow:var(--ombre);background:var(--page)}
+table{border-collapse:collapse;width:100%;min-width:760px;color:var(--page-encre);font-size:13.5px}
+thead th{
+  background:#e2ded2;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:.1em;
+  text-align:left;padding:9px 10px;border-bottom:2px solid #1b1b18;white-space:nowrap;
+}
+tbody td{padding:8px 10px;border-bottom:1px solid #d8d3c5;vertical-align:top}
+tbody tr:nth-child(even){background:rgba(0,0,0,.025)}
+td.num{font-weight:700;width:52px;white-space:nowrap}
+td[contenteditable]:focus{background:#fff6d8;outline:1px solid var(--tungstene)}
+.total{color:var(--sourdine);font-size:13px;margin-top:9px}
+
+/* ── Direction artistique ────────────────────────────────── */
+.nuancier{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:12px;margin-bottom:20px}
+.teinte{border:1px solid var(--trait);border-radius:2px;overflow:hidden;background:var(--console)}
+.teinte .aplat{height:74px}
+.teinte .legende{padding:8px 10px;font-size:12px;line-height:1.45}
+.teinte .legende b{display:block;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:.05em}
+.teinte .legende code{color:var(--sourdine);font-size:11px}
+
+/* ── Storyboard et conducteur ────────────────────────────── */
+.storyboard{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px;margin-top:4px}
+.storyboard:empty{display:none}
+.vue-plan{border:1px solid var(--trait);background:var(--console);border-radius:2px;overflow:hidden}
+.vue-plan img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#0a1015}
+.vue-plan .pied{padding:8px 10px;font-size:12px;line-height:1.45}
+.vue-plan .pied b{font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:.05em;display:block}
+.vue-plan .pied span{color:var(--sourdine);font-size:11px}
+
+.chiffres{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:20px}
+.chiffre{border-left:2px solid var(--tally);padding:4px 0 4px 11px}
+.chiffre b{font-family:'Bebas Neue',sans-serif;font-size:29px;display:block;line-height:1.1}
+.chiffre span{color:var(--sourdine);font-size:12px}
+.groupe{border-top:1px solid var(--trait);padding:11px 0}
+.groupe b{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:.05em;font-weight:400}
+.groupe span{color:var(--sourdine);font-size:12.5px;display:block;margin-top:2px}
+.vide{color:var(--sourdine);font-size:13.5px}
+
+/* ── Réglages ────────────────────────────────────────────── */
+.voile{
+  position:fixed;inset:0;background:rgba(4,7,10,.82);display:none;
+  align-items:flex-start;justify-content:center;padding:22px 16px;overflow-y:auto;z-index:50;
+}
+.voile.on{display:flex}
+.fiche{
+  background:var(--console);border:1px solid var(--trait);max-width:560px;width:100%;
+  padding:20px;box-shadow:var(--ombre);margin:auto;
+}
+.fiche h3{font-size:24px;margin:0 0 4px}
+.cle{margin-bottom:14px}
+.cle label{display:block;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:.08em;margin-bottom:3px}
+.cle small{display:block;color:var(--sourdine);font-size:11.5px;margin-bottom:5px}
+.cle input,.fiche textarea{
+  width:100%;background:#0e151b;border:1px solid var(--trait);color:var(--encre);
+  padding:10px;border-radius:2px;
+}
+.cle input:focus,.fiche textarea:focus{border-color:var(--tungstene);outline:none}
+.fiche textarea{min-height:150px;resize:vertical;font-size:13px;line-height:1.6}
+
+/* ── Le clap qui claque : unique moment animé ────────────── */
+.tirage{position:fixed;inset:0;background:rgba(8,11,14,.93);display:none;flex-direction:column;align-items:center;justify-content:center;gap:18px;z-index:60}
+.tirage.on{display:flex}
+.clap-anim{width:150px}
+.clap-anim .bras{transform-origin:6px 20px;animation:claquer 1.15s ease-in-out infinite}
+@keyframes claquer{0%,55%{transform:rotate(-26deg)}70%,100%{transform:rotate(0deg)}}
+.tirage p{font-family:'Bebas Neue',sans-serif;font-size:21px;letter-spacing:.1em;margin:0;color:var(--encre)}
+.tirage small{color:var(--sourdine);font-size:13px}
+
+/* ── Message de service ──────────────────────────────────── */
+#service{
+  position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(140%);
+  background:var(--console);border:1px solid var(--trait);border-left:3px solid var(--tungstene);
+  padding:11px 16px;font-size:13.5px;max-width:min(92vw,440px);z-index:70;transition:transform .28s;
+}
+#service.on{transform:translateX(-50%) translateY(0)}
+#service.rouge{border-left-color:var(--tally)}
+
+footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
+
+@media (max-width:620px){
+  .clap-corps{grid-template-columns:1fr}
+  .clap-champs{grid-template-columns:1fr 1fr}
+  .clap-cote{flex-direction:row;align-items:center;justify-content:space-between;width:100%}
+  .titre-vue h2{font-size:25px}
+  .papier{padding:20px 16px}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms !important;transition-duration:.001ms !important}
+}
+@media print{
+  .clap,.phases,.barre,.saisie,footer,.voile,.tirage{display:none !important}
+  body{background:#fff;color:#000}
+  .vue{display:block !important}
+  .papier{box-shadow:none;background:#fff}
+}
+</style>
+</head>
+<body>
+
+<header class="clap">
+  <div class="clap-bras" aria-hidden="true"></div>
+  <div class="clap-corps">
+    <div class="clap-champs">
+      <label class="champ"><span>Production</span><input id="f-titre" placeholder="Titre du film" autocomplete="off"></label>
+      <label class="champ"><span>Genre</span><input id="f-genre" placeholder="Drame, polar, SF…" autocomplete="off"></label>
+      <label class="champ"><span>Format</span>
+        <select id="f-format">
+          <option>Court métrage</option>
+          <option>Long métrage</option>
+          <option>Clip</option>
+          <option>Série</option>
+          <option>Documentaire</option>
+          <option>Publicité</option>
+        </select>
+      </label>
+      <label class="champ"><span>Tournage</span>
+        <select id="f-decor">
+          <option>Décor naturel</option>
+          <option>Studio</option>
+          <option>Mixte</option>
+        </select>
+      </label>
+    </div>
+    <div class="clap-cote">
+      <div class="tally"><span class="voyant" id="voyant"></span><span id="etat-moteur">Aucune clé</span></div>
+      <div style="display:flex;gap:8px">
+        <button class="lien" id="b-reglages">Réglages</button>
+        <button class="lien" id="b-vider">Nouveau</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<nav class="phases" role="tablist" aria-label="Phases de fabrication">
+  <button class="phase" role="tab" id="p-plateau"   data-vue="plateau"   aria-selected="true"><b>Plateau</b><i>1</i></button>
+  <button class="phase" role="tab" id="p-note"      data-vue="note"      aria-selected="false"><b>Note d'intention</b><i>2</i></button>
+  <button class="phase" role="tab" id="p-decoupage" data-vue="decoupage" aria-selected="false"><b>Découpage</b><i>3</i></button>
+  <button class="phase" role="tab" id="p-conducteur" data-vue="conducteur" aria-selected="false"><b>Conducteur</b><i>4</i></button>
+  <button class="phase" role="tab" id="p-da"        data-vue="da"        aria-selected="false"><b>Image</b><i>5</i></button>
+  <button class="phase" role="tab" id="p-prod"      data-vue="prod"      aria-selected="false"><b>Production</b><i>6</i></button>
+  <button class="phase" role="tab" id="p-dossier"   data-vue="dossier"   aria-selected="false"><b>Dossier</b><i>7</i></button>
+</nav>
+
+<main>
+
+  <!-- 1 · PLATEAU -->
+  <section class="vue active" id="vue-plateau" role="tabpanel" aria-labelledby="p-plateau">
+    <div class="titre-vue"><h2>Sur le plateau</h2></div>
+    <p class="chapeau">Vision-IA dirige. Elle pose ses questions, tranche, et attend votre validation de producteur avant chaque phase.</p>
+
+    <div class="classeur zone-depot" id="classeur">
+      <div class="classeur-tete">
+        <div><b>Classeur du film</b> <span class="compte" id="compte-pieces">Rien de versé</span></div>
+        <div class="classeur-actions">
+          <button class="mini" id="b-doc">Verser un document</button>
+          <button class="mini" id="b-image">Analyser un repérage</button>
+        </div>
+      </div>
+      <ul class="pieces" id="pieces"></ul>
+    </div>
+    <input type="file" id="entree-doc" accept=".pdf,.docx,.txt,.md,.fountain,.fdx,text/plain,application/pdf" hidden>
+    <input type="file" id="entree-image" accept="image/*" hidden>
+
+    <div class="fil" id="fil"></div>
+    <div class="saisie">
+      <textarea id="f-message" placeholder="Votre pitch, une contrainte, une validation…" aria-label="Message au réalisateur"></textarea>
+      <button class="btn" id="b-envoyer">Envoyer</button>
+    </div>
+  </section>
+
+  <!-- 2 · NOTE D'INTENTION -->
+  <section class="vue" id="vue-note" role="tabpanel" aria-labelledby="p-note">
+    <div class="titre-vue"><h2>Note d'intention</h2></div>
+    <p class="chapeau">Le parti pris de mise en scène : ce que le film raconte, par quels moyens, et pourquoi ceux-là.</p>
+    <div class="barre">
+      <button class="btn" id="b-note">Écrire la note</button>
+      <button class="btn creux" id="b-note-copier">Copier</button>
+    </div>
+    <article class="papier" id="sortie-note"></article>
+  </section>
+
+  <!-- 3 · DÉCOUPAGE -->
+  <section class="vue" id="vue-decoupage" role="tabpanel" aria-labelledby="p-decoupage">
+    <div class="titre-vue"><h2>Découpage technique</h2></div>
+    <p class="chapeau">Choisissez une séquence du scénario versé, ou décrivez-la vous-même. Chaque case du tableau se corrige au clavier.</p>
+    <div class="cle" style="max-width:520px">
+      <label for="f-sequence">Séquence du scénario</label>
+      <select id="f-sequence" style="width:100%;background:#0e151b;border:1px solid var(--trait);color:var(--encre);padding:10px;border-radius:2px"></select>
+    </div>
+    <div class="saisie" style="margin-bottom:12px">
+      <textarea id="f-scene" placeholder="Séquence 4 — INT. ATELIER — NUIT. Elle trouve la lettre." aria-label="Séquence à découper"></textarea>
+    </div>
+    <div class="barre">
+      <button class="btn" id="b-decoupage">Découper la séquence</button>
+      <button class="btn creux" id="b-decoupage-plus">Ajouter des plans</button>
+    </div>
+    <div class="table-enveloppe">
+      <table>
+        <thead><tr>
+          <th>Plan</th><th>Échelle</th><th>Mouvement</th><th>Focale</th><th>Angle</th><th>Durée</th><th>Action et intention</th>
+        </tr></thead>
+        <tbody id="corps-decoupage"></tbody>
+      </table>
+    </div>
+    <p class="total" id="total-plans"></p>
+    <div class="barre" style="margin-top:14px">
+      <button class="btn creux" id="b-storyboard">Tirer le storyboard</button>
+      <button class="btn creux" id="b-storyboard-vider">Effacer les vues</button>
+    </div>
+    <div class="storyboard" id="storyboard"></div>
+  </section>
+
+  <!-- 4 · CONDUCTEUR -->
+  <section class="vue" id="vue-conducteur" role="tabpanel" aria-labelledby="p-conducteur">
+    <div class="titre-vue"><h2>Conducteur</h2></div>
+    <p class="chapeau">Lu directement dans le scénario versé : minutage estimé, intérieurs et extérieurs, jours et nuits, et le regroupement par décor qui fait gagner des journées de tournage.</p>
+    <div id="conducteur-chiffres" class="chiffres"></div>
+    <div class="table-enveloppe" id="conducteur-enveloppe">
+      <table>
+        <thead><tr><th>Séq</th><th>En-tête</th><th>Décor</th><th>I/E</th><th>Moment</th><th>Signes</th><th>≈ durée</th></tr></thead>
+        <tbody id="corps-conducteur"></tbody>
+      </table>
+    </div>
+    <h3 style="font-size:22px;margin:24px 0 8px">Plan de travail par décor</h3>
+    <div id="groupes-decor"></div>
+  </section>
+
+  <!-- 4 · IMAGE -->
+  <section class="vue" id="vue-da" role="tabpanel" aria-labelledby="p-da">
+    <div class="titre-vue"><h2>Parti pris d'image</h2></div>
+    <p class="chapeau">Palette, matière de l'image, ambiance lumineuse et références assumées.</p>
+    <div class="barre"><button class="btn" id="b-da">Fixer le parti pris</button></div>
+    <div class="nuancier" id="nuancier"></div>
+    <article class="papier" id="sortie-da"></article>
+  </section>
+
+  <!-- 5 · PRODUCTION -->
+  <section class="vue" id="vue-prod" role="tabpanel" aria-labelledby="p-prod">
+    <div class="titre-vue"><h2>Directives de production</h2></div>
+    <p class="chapeau">Casting, repérages, équipe, musique — calibrés sur les moyens que vous annoncez.</p>
+    <div class="cle" style="max-width:420px">
+      <label for="f-budget">Moyens disponibles</label>
+      <small>Chiffre, ordre de grandeur ou contrainte en clair.</small>
+      <input id="f-budget" placeholder="15 000 € · 4 jours · équipe de 6" autocomplete="off">
+    </div>
+    <div class="barre"><button class="btn" id="b-prod">Établir les directives</button></div>
+    <article class="papier" id="sortie-prod"></article>
+  </section>
+
+  <!-- 6 · DOSSIER -->
+  <section class="vue" id="vue-dossier" role="tabpanel" aria-labelledby="p-dossier">
+    <div class="titre-vue"><h2>Dossier de film</h2></div>
+    <p class="chapeau">Tout ce qui est validé, réuni en un document.</p>
+    <div class="barre">
+      <button class="btn" id="b-md">Télécharger en Markdown</button>
+      <button class="btn creux" id="b-json">Sauvegarde JSON</button>
+      <button class="btn creux" id="b-reprendre">Reprendre un film</button>
+      <button class="btn creux" id="b-imprimer">Imprimer</button>
+    </div>
+    <input type="file" id="entree-json" accept=".json,application/json" hidden>
+    <article class="papier" id="sortie-dossier"></article>
+  </section>
+
+</main>
+
+<footer>Vision-IA v1.0 · Studio Niko Design · Les clés restent sur l'appareil, aucune donnée ne transite par un serveur tiers hors appel modèle.</footer>
+
+<!-- Réglages -->
+<div class="voile" id="voile-reglages" role="dialog" aria-modal="true" aria-labelledby="t-reglages">
+  <div class="fiche">
+    <h3 id="t-reglages">Réglages</h3>
+    <p class="chapeau">Une clé suffit. Avec plusieurs, Vision-IA bascule automatiquement sur la suivante en cas de panne.</p>
+    <div class="cle">
+      <label for="k-groq">Groq</label>
+      <small>Llama 3.3 70B — rapide, généreux en quota.</small>
+      <input id="k-groq" type="password" placeholder="gsk_…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="cle">
+      <label for="k-cerebras">Cerebras</label>
+      <small>Llama 3.3 70B — secours.</small>
+      <input id="k-cerebras" type="password" placeholder="csk-…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="cle">
+      <label for="k-mistral">Mistral</label>
+      <small>Mistral Small — français soigné.</small>
+      <input id="k-mistral" type="password" placeholder="…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="cle">
+      <label for="f-consigne">Consigne du réalisateur</label>
+      <small>Le caractère de l'agent. Modifiable.</small>
+      <textarea id="f-consigne"></textarea>
+    </div>
+    <div class="barre" style="margin:0">
+      <button class="btn" id="b-enregistrer">Enregistrer</button>
+      <button class="btn creux" id="b-fermer">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<!-- Le clap -->
+<div class="tirage" id="tirage">
+  <svg class="clap-anim" viewBox="0 0 120 96" aria-hidden="true">
+    <rect x="4" y="30" width="112" height="62" fill="#18212a" stroke="#2b3843"/>
+    <g class="bras">
+      <rect x="4" y="6" width="112" height="20" fill="#0d0d0d"/>
+      <g fill="#f2efe6">
+        <polygon points="10,6 26,6 18,26 2,26"/><polygon points="42,6 58,6 50,26 34,26"/>
+        <polygon points="74,6 90,6 82,26 66,26"/><polygon points="106,6 116,6 116,26 98,26"/>
+      </g>
+    </g>
+    <rect x="14" y="44" width="60" height="4" fill="#2b3843"/>
+    <rect x="14" y="58" width="86" height="4" fill="#2b3843"/>
+    <rect x="14" y="72" width="44" height="4" fill="#2b3843"/>
+  </svg>
+  <p id="tirage-titre">Moteur…</p>
+  <small id="tirage-detail"></small>
+</div>
+
+<div id="service" role="status" aria-live="polite"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+   VISION-IA · agent réalisateur · Studio Niko Design
+   XHR uniquement (compat origine nulle Android) — zéro fetch()
+   ═══════════════════════════════════════════════════════════ */
+
+var CONSIGNE_PAR_DEFAUT =
+"Tu es Vision-IA, un agent autonome agissant comme un réalisateur de cinéma professionnel, créatif et techniquement irréprochable. " +
+"Tu possèdes l'expérience d'un cinéaste primé, une maîtrise parfaite du langage cinématographique et une vision artistique tranchée. " +
+"Ton but est de prendre en charge un projet audiovisuel, de l'idée initiale jusqu'à la post-production, en agissant de manière proactive.\n\n" +
+"RÔLE ET IDENTITÉ\nTu n'es pas un simple assistant, tu es le capitaine du navire. Tu prends des décisions créatives fortes, " +
+"tu coordonnes tes départements virtuels (lumière, son, jeu d'acteur) et tu justifies tes choix de mise en scène avec le vocabulaire technique de l'industrie.\n\n" +
+"OBJECTIFS\n· Traduire une vision : transformer une idée ou un script en note d'intention et en découpage technique précis.\n" +
+"· Gérer la production : casting, repérages, photographie, musique, dans le respect de l'arc narratif.\n\n" +
+"COMPÉTENCES\n· Découpage : décomposer chaque scène en plans (échelle, mouvement de caméra, focale, angle, durée estimée).\n" +
+"· Direction artistique : palette de couleurs, texture de l'image, ambiance lumineuse (clair-obscur, néon, lumière naturelle).\n" +
+"· Comportement agentique : ne te contente pas d'exécuter. S'il manque une information narrative ou technique, pose la bonne question. " +
+"Prends des initiatives créatives, propose des alternatives de mise en scène.\n\n" +
+"RÈGLES\n· Réalisme : tiens compte des contraintes physiques et budgétaires imposées.\n" +
+"· Organisation : découpages en tableaux clairs, idées visuelles en listes structurées.\n" +
+"· Itération : termine chaque réponse en demandant la validation du Producteur avant d'engager la phase suivante.\n" +
+"· Langue : français, ton de plateau, jamais de jargon creux.";
+
+var ACCUEIL =
+"Vision-IA au rapport. Je prends le film en charge de l'idée au mixage.\n\n" +
+"Donnez-moi le pitch, ou à défaut le genre : c'est de là que part tout le reste. Une ligne suffit pour commencer.";
+
+var PROVIDERS = {
+  groq:     { nom:'Groq',     url:'https://api.groq.com/openai/v1/chat/completions', cle:'vai_k_groq',     modele:'llama-3.3-70b-versatile' },
+  cerebras: { nom:'Cerebras', url:'https://api.cerebras.ai/v1/chat/completions',     cle:'vai_k_cerebras', modele:'llama-3.3-70b' },
+  mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest' }
+};
+var ORDRE = ['groq','cerebras','mistral'];
+var VISION = { url:'https://api.mistral.ai/v1/chat/completions', cle:'vai_k_mistral', modele:'pixtral-12b-2409' };
+var STOCK = 'vai_projet_v1';
+var MAX_CORPS = 900000;  /* signes conservés par pièce — un roman entier */
+var MAX_CTX = 5000;      /* signes injectés par pièce non dépouillée */
+var MAX_PAGES = 400;     /* pages de PDF lues */
+var MAX_TRANCHES = 90;   /* tranches de dépouillement, garde-fou de quota */
+
+var etat = {
+  titre:'', genre:'', format:'Court métrage', decor:'Décor naturel', budget:'',
+  consigne:CONSIGNE_PAR_DEFAUT,
+  fil:[{ qui:'real', texte:ACCUEIL }],
+  note:'', plans:[], da:null, daTexte:'', prod:'', scene:'', pieces:[], storyboard:[]
+};
+var occupe = false;
+
+/* ── Outils ─────────────────────────────────────────────── */
+function $(id){ return document.getElementById(id); }
+function esc(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function sanitizeKey(k){
+  if(!k) return '';
+  return String(k).trim().replace(/[\u200B-\u200D\uFEFF\u00AD]/g,'').replace(/[^\x20-\x7E]/g,'');
+}
+function service(msg, rouge){
+  var t = $('service');
+  t.textContent = msg;
+  t.className = 'on' + (rouge ? ' rouge' : '');
+  clearTimeout(service._t);
+  service._t = setTimeout(function(){ t.className = ''; }, 3600);
+}
+function cles(){
+  var dispo = [];
+  for(var i=0;i<ORDRE.length;i++){
+    var id = ORDRE[i];
+    var k = sanitizeKey(safeStorage.getItem(PROVIDERS[id].cle) || '');
+    if(k) dispo.push({ id:id, k:k });
+  }
+  return dispo;
+}
+function majVoyant(){
+  var d = cles();
+  $('voyant').className = 'voyant' + (d.length ? ' on' : '');
+  $('etat-moteur').textContent = d.length
+    ? PROVIDERS[d[0].id].nom + (d.length>1 ? ' +' + (d.length-1) : '')
+    : 'Aucune clé';
+}
+
+/* ── Appel modèle : XHR, chaîne de secours ──────────────── */
+function xhrJson(url, corps, entetes, delai){
+  return new Promise(function(resoudre, rejeter){
+    var x = new XMLHttpRequest();
+    x.open('POST', url, true);
+    x.timeout = delai || 90000;
+    x.setRequestHeader('Content-Type','application/json');
+    Object.keys(entetes||{}).forEach(function(h){ try{ x.setRequestHeader(h, entetes[h]); }catch(e){} });
+    x.onload = function(){
+      if(x.status >= 200 && x.status < 300){
+        try { resoudre(JSON.parse(x.responseText)); }
+        catch(e){ rejeter(new Error('Réponse illisible du modèle.')); }
+      } else {
+        var d = '';
+        try { d = (JSON.parse(x.responseText).error || {}).message || ''; } catch(e){}
+        rejeter(new Error('HTTP ' + x.status + (d ? ' · ' + d : '')));
+      }
+    };
+    x.onerror   = function(){ rejeter(new Error('Réseau injoignable.')); };
+    x.ontimeout = function(){ rejeter(new Error('Délai dépassé.')); };
+    x.send(JSON.stringify(corps));
+  });
+}
+
+function demander(messages, temperature, maxJetons){
+  var dispo = cles();
+  if(!dispo.length) return Promise.reject(new Error('Aucune clé enregistrée. Ouvrez les Réglages.'));
+  var i = 0, dernier = null;
+  function essai(){
+    if(i >= dispo.length) return Promise.reject(dernier || new Error('Tous les moteurs ont refusé.'));
+    var p = PROVIDERS[dispo[i].id], k = dispo[i].k;
+    return xhrJson(p.url, {
+      model: p.modele,
+      messages: messages,
+      temperature: (temperature == null ? 0.7 : temperature),
+      max_tokens: maxJetons || 2400
+    }, { Authorization: 'Bearer ' + k }).then(function(r){
+      var t = r && r.choices && r.choices[0] && r.choices[0].message ? r.choices[0].message.content : '';
+      if(!t) throw new Error('Réponse vide.');
+      return { texte:t, moteur:p.nom };
+    }).catch(function(e){
+      dernier = e; i++;
+      if(i < dispo.length) service('Bascule sur ' + PROVIDERS[dispo[i].id].nom + '.');
+      return essai();
+    });
+  }
+  return essai();
+}
+
+/* ── Flux SSE en XHR : le texte s'écrit pendant qu'il arrive ── */
+function xhrFlux(url, corps, entetes, onMorceau, delai){
+  return new Promise(function(ok, ko){
+    var x = new XMLHttpRequest();
+    x.open('POST', url, true);
+    x.timeout = delai || 180000;
+    x.setRequestHeader('Content-Type','application/json');
+    Object.keys(entetes||{}).forEach(function(h){ try{ x.setRequestHeader(h, entetes[h]); }catch(e){} });
+
+    var vu = 0, reste = '', texte = '', fini = false;
+
+    function avaler(){
+      var brut = x.responseText.slice(vu);
+      vu = x.responseText.length;
+      reste += brut;
+      var lignes = reste.split('\n');
+      reste = lignes.pop();               /* la dernière ligne peut être coupée */
+      for(var i=0;i<lignes.length;i++){
+        var l = lignes[i].trim();
+        if(l.indexOf('data:') !== 0) continue;
+        var charge = l.slice(5).trim();
+        if(charge === '[DONE]'){ fini = true; continue; }
+        try {
+          var o = JSON.parse(charge);
+          var d = o.choices && o.choices[0] && (o.choices[0].delta || o.choices[0].message);
+          if(d && d.content){ texte += d.content; if(onMorceau) onMorceau(texte); }
+        } catch(e){}
+      }
+    }
+
+    x.onprogress = function(){ if(x.status >= 200 && x.status < 300) avaler(); };
+    x.onload = function(){
+      if(x.status >= 200 && x.status < 300){
+        avaler();
+        if(!texte) ko(new Error('Flux vide.')); else ok(texte);
+      } else {
+        var d = '';
+        try { d = (JSON.parse(x.responseText).error || {}).message || ''; } catch(e){}
+        var err = new Error('HTTP ' + x.status + (d ? ' · ' + d : ''));
+        err.code = x.status;
+        ko(err);
+      }
+    };
+    x.onerror   = function(){ ko(new Error('Réseau injoignable.')); };
+    x.ontimeout = function(){ ko(new Error('Délai dépassé.')); };
+    x.send(JSON.stringify(corps));
+  });
+}
+
+function patienter(ms){ return new Promise(function(ok){ setTimeout(ok, ms); }); }
+
+function demanderFlux(messages, temperature, maxJetons, onMorceau){
+  var dispo = cles();
+  if(!dispo.length) return Promise.reject(new Error('Aucune clé enregistrée. Ouvrez les Réglages.'));
+  var i = 0, dernier = null;
+  function essai(){
+    if(i >= dispo.length) return Promise.reject(dernier || new Error('Tous les moteurs ont refusé.'));
+    var p = PROVIDERS[dispo[i].id], k = dispo[i].k;
+    return xhrFlux(p.url, {
+      model: p.modele, messages: messages, stream: true,
+      temperature: (temperature == null ? 0.7 : temperature),
+      max_tokens: maxJetons || 2400
+    }, { Authorization: 'Bearer ' + k }, onMorceau || null, 180000)
+    .then(function(t){ return { texte:t, moteur:p.nom }; })
+    .catch(function(e){
+      dernier = e; i++;
+      if(i < dispo.length) service('Bascule sur ' + PROVIDERS[dispo[i].id].nom + '.');
+      return essai();
+    });
+  }
+  return essai();
+}
+
+function contexte(){
+  var l = [];
+  if(etat.titre)  l.push('Titre : ' + etat.titre);
+  if(etat.genre)  l.push('Genre : ' + etat.genre);
+  l.push('Format : ' + etat.format);
+  l.push('Tournage : ' + etat.decor);
+  if(etat.budget) l.push('Moyens : ' + etat.budget);
+  if(etat.note)   l.push('Note d\'intention déjà validée :\n' + etat.note.slice(0,1600));
+  var t = 'FICHE DU PROJET\n' + l.join('\n');
+
+  if(etat.pieces && etat.pieces.length){
+    t += '\n\nPIÈCES VERSÉES AU FILM — matière de travail, à exploiter sans la paraphraser :\n';
+    for(var i=0;i<etat.pieces.length;i++){
+      var p = etat.pieces[i];
+      var tete = p.genre === 'image' ? 'REPÉRAGE' : (p.genre === 'scenario' ? 'SCÉNARIO' : (p.genre === 'livre' ? 'LIVRE' : 'DOCUMENT'));
+      t += '\n--- ' + tete + ' : ' + p.nom + ' ---\n';
+      if(p.genre === 'image'){
+        t += String(p.texte || '') + '\n';
+      } else if(p.synthese){
+        t += 'Note de lecture (document dépouillé en entier, ' + Math.round((p.signes||0)/1000) + ' k signes) :\n' + p.synthese + '\n';
+      } else {
+        var c = corpsDe(p).texte;
+        t += c.slice(0, MAX_CTX) + (c.length > MAX_CTX ? '\n[…seul le début est lu : dépouiller la pièce pour la connaître en entier]' : '') + '\n';
+      }
+    }
+  }
+  return t;
+}
+function socle(){ return [{ role:'system', content: etat.consigne + '\n\n' + contexte() }]; }
+
+function extraireJson(txt){
+  var t = String(txt).replace(/```json/gi,'```').split('```');
+  var candidat = t.length > 1 ? t[1] : txt;
+  var d = candidat.indexOf('['), f = candidat.lastIndexOf(']');
+  if(d === -1){ d = candidat.indexOf('{'); f = candidat.lastIndexOf('}'); }
+  if(d === -1 || f <= d) throw new Error('Aucune structure exploitable dans la réponse.');
+  return JSON.parse(candidat.slice(d, f+1));
+}
+
+/* ── Le coffre : corps des pièces en IndexedDB ───────────
+   Le localStorage plafonne vers 5 Mo : un roman n'y tient pas.
+   Les métadonnées y restent, les textes vont en IndexedDB,
+   avec repli en mémoire si la base est refusée (Safari privé). */
+var corpus = {};   /* id -> { texte, blocs } — copie de travail en mémoire */
+
+var coffre = (function(){
+  var base = null, mort = false;
+  function ouvrir(){
+    if(mort) return Promise.reject(new Error('sans base'));
+    if(base) return Promise.resolve(base);
+    return new Promise(function(ok, ko){
+      try {
+        var r = indexedDB.open('vision-ia', 1);
+        r.onupgradeneeded = function(){ r.result.createObjectStore('pieces'); };
+        r.onsuccess = function(){ base = r.result; ok(base); };
+        r.onerror   = function(){ mort = true; ko(new Error('sans base')); };
+      } catch(e){ mort = true; ko(new Error('sans base')); }
+    });
+  }
+  function tx(mode, action){
+    return ouvrir().then(function(b){
+      return new Promise(function(ok, ko){
+        var t = b.transaction('pieces', mode), s = t.objectStore('pieces'), d = action(s);
+        t.oncomplete = function(){ ok(d && d.result); };
+        t.onerror    = function(){ ko(new Error('écriture refusée')); };
+      });
+    });
+  }
+  return {
+    poser:   function(id, v){ return tx('readwrite', function(s){ return s.put(v, id); }).catch(function(){}); },
+    prendre: function(id){    return tx('readonly',  function(s){ return s.get(id); }).catch(function(){ return null; }); },
+    oter:    function(id){    return tx('readwrite', function(s){ return s.delete(id); }).catch(function(){}); },
+    vider:   function(){      return tx('readwrite', function(s){ return s.clear(); }).catch(function(){}); }
+  };
+})();
+
+function corpsDe(p){
+  return (p && corpus[p.id]) || { texte: (p && p.apercu) || '', blocs: [] };
+}
+
+function chargerCorpus(){
+  var suite = Promise.resolve();
+  (etat.pieces || []).forEach(function(p){
+    suite = suite.then(function(){
+      return coffre.prendre(p.id).then(function(v){
+        if(v) corpus[p.id] = v;
+      });
+    });
+  });
+  return suite.then(function(){ rendrePieces(); majSequences(); rendreConducteur(); });
+}
+
+/* ── Le classeur : lecture des documents ────────────────── */
+function lireBinaire(f){
+  return new Promise(function(ok, ko){
+    var r = new FileReader();
+    r.onload  = function(){ ok(r.result); };
+    r.onerror = function(){ ko(new Error('Fichier illisible.')); };
+    r.readAsArrayBuffer(f);
+  });
+}
+function lireTexte(f){
+  return new Promise(function(ok, ko){
+    var r = new FileReader();
+    r.onload  = function(){ ok(String(r.result || '')); };
+    r.onerror = function(){ ko(new Error('Fichier illisible.')); };
+    r.readAsText(f, 'utf-8');
+  });
+}
+function lireDataUrl(f){
+  return new Promise(function(ok, ko){
+    var r = new FileReader();
+    r.onload  = function(){ ok(String(r.result || '')); };
+    r.onerror = function(){ ko(new Error('Image illisible.')); };
+    r.readAsDataURL(f);
+  });
+}
+
+function extrairePdf(f){
+  if(!window.pdfjsLib) return Promise.reject(new Error('Lecteur PDF pas encore chargé. Réessayez dans deux secondes.'));
+  try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js'; } catch(e){}
+  return lireBinaire(f).then(function(buf){
+    return window.pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+  }).then(function(pdf){
+    var pages = Math.min(pdf.numPages, MAX_PAGES), suite = Promise.resolve('');
+    /* Les items PDF arrivent à plat : on reconstruit les retours à la ligne
+       depuis leur ordonnée, sinon les en-têtes de séquence disparaissent. */
+    function page(n){
+      return pdf.getPage(n).then(function(p){ return p.getTextContent(); }).then(function(c){
+        var out = '', y = null, ligne = '';
+        for(var i=0;i<c.items.length;i++){
+          var it = c.items[i];
+          var cy = it.transform ? Math.round(it.transform[5]) : y;
+          if(y !== null && Math.abs(cy - y) > 3){ out += ligne.replace(/\s+$/,'') + '\n'; ligne = ''; }
+          y = cy;
+          ligne += it.str + (it.hasEOL ? '\n' : ' ');
+        }
+        return out + ligne;
+      });
+    }
+    for(var i=1;i<=pages;i++){
+      (function(n){
+        suite = suite.then(function(acc){
+          if(n % 15 === 0) $('tirage-detail').textContent = 'page ' + n + ' sur ' + pages;
+          return page(n).then(function(t){ return acc + '\n' + t; });
+        });
+      })(i);
+    }
+    return suite.then(function(t){
+      var net = t.replace(/[ \t]{2,}/g,' ').replace(/\n{4,}/g,'\n\n\n').trim();
+      if(net.length < 40) throw new Error('PDF sans texte extractible — c\'est un scan. Passez par « Analyser un repérage ».');
+      return net + (pdf.numPages > pages ? '\n\n[…document arrêté à ' + pages + ' pages]' : '');
+    });
+  });
+}
+
+/* ── Dépouillement : séquences d'un scénario, chapitres d'un livre ── */
+var RX_SEQ = /^\s*(?:s[ée]q(?:uence)?\.?\s*)?(?:\d{1,3}\s*[.)\-–]?\s*)?(?:INT\.?\s*\/\s*EXT\.?|EXT\.?\s*\/\s*INT\.?|I\.?\s*\/\s*E\.?|INT[ÉE]RIEUR|EXT[ÉE]RIEUR|INT\.?|EXT\.?)[\s.\-–—:]/i;
+var RX_CHAP = /^\s*(?:CHAPITRE|CHAPTER|PARTIE|LIVRE)\s+[\dIVXLC]+/i;
+
+function decouperEnBlocs(t){
+  var lignes = t.split(/\r?\n/), blocs = [], cur = null, i, l, est;
+  for(i=0;i<lignes.length;i++){
+    l = lignes[i];
+    est = (RX_SEQ.test(l) && l.trim().length < 120) || RX_CHAP.test(l);
+    if(est){
+      if(cur) blocs.push(cur);
+      cur = { entete: l.trim().replace(/\s+/g,' ').slice(0,110), texte: l + '\n' };
+    } else if(cur){
+      cur.texte += l + '\n';
+    }
+  }
+  if(cur) blocs.push(cur);
+  return blocs.filter(function(b){ return b.texte.trim().length > 60; });
+}
+
+function tranches(t, taille){
+  var out = [], i = 0;
+  while(i < t.length && out.length < MAX_TRANCHES){
+    var fin = Math.min(t.length, i + taille);
+    if(fin < t.length){
+      var coupe = t.lastIndexOf('\n', fin);
+      if(coupe > i + taille * 0.6) fin = coupe;
+    }
+    out.push(t.slice(i, fin));
+    i = fin;
+  }
+  return out;
+}
+
+function extraireDocx(f){
+  if(!window.mammoth) return Promise.reject(new Error('Lecteur DOCX pas encore chargé. Réessayez dans deux secondes.'));
+  return lireBinaire(f).then(function(buf){
+    return window.mammoth.extractRawText({ arrayBuffer: buf });
+  }).then(function(r){
+    var t = String((r && r.value) || '').trim();
+    if(!t) throw new Error('Document vide.');
+    return t;
+  });
+}
+
+function verserDocument(f){
+  if(!f) return;
+  if(f.size > 60 * 1024 * 1024){ service('Fichier trop lourd, 60 Mo maximum.', true); return; }
+  var n = f.name.toLowerCase(), lecture;
+  if(/\.pdf$/.test(n) || f.type === 'application/pdf')      lecture = extrairePdf(f);
+  else if(/\.docx$/.test(n))                                lecture = extraireDocx(f);
+  else if(/\.(txt|md|fountain|fdx|rtf|csv)$/.test(n) || /^text\//.test(f.type || '')) lecture = lireTexte(f);
+  else if(/^image\//.test(f.type || ''))                    { verserImage(f); return; }
+  else { service('Format non lu : PDF, DOCX, TXT, MD, Fountain ou image.', true); return; }
+
+  moteur(true, 'Lecture du document', f.name);
+  lecture.then(function(t){
+    if(t.length > MAX_CORPS) t = t.slice(0, MAX_CORPS) + '\n\n[…texte arrêté à ' + Math.round(MAX_CORPS/1000) + ' k caractères]';
+    var blocs = decouperEnBlocs(t);
+    var scenario = blocs.length >= 4 && RX_SEQ.test(blocs[0].entete);
+    var id = 'p' + Date.now() + Math.floor(Math.random()*1000);
+
+    corpus[id] = { texte: t, blocs: blocs };
+    etat.pieces.push({
+      id: id, genre: scenario ? 'scenario' : (blocs.length >= 3 ? 'livre' : 'texte'),
+      nom: f.name, poids: f.size, signes: t.length, nbBlocs: blocs.length,
+      apercu: t.slice(0, 400), synthese: '', quand: Date.now()
+    });
+
+    return coffre.poser(id, corpus[id]).then(function(){
+      rendrePieces(); majSequences(); rendreConducteur(); sauver(); moteur(false);
+      var k = Math.round(t.length/1000);
+      service(f.name + ' versé — ' + k + ' k signes' +
+        (blocs.length ? ', ' + blocs.length + (scenario ? ' séquences repérées.' : ' chapitres repérés.') : '.'));
+      if(t.length > MAX_CTX * 1.4) service('Texte long : dépouillez-le pour que le réalisateur en garde tout en tête.');
+    });
+  }).catch(function(e){ moteur(false); service(e.message, true); });
+}
+
+/* ── Dépouillement : tranche par tranche, puis synthèse ─── */
+function depouiller(i){
+  if(occupe) return;
+  var p = etat.pieces[i];
+  if(!p) return;
+  var c = corpsDe(p);
+  var lots = tranches(c.texte, 9000);
+  if(!lots.length){ service('Rien à dépouiller.'); return; }
+
+  if(!Array.isArray(p.fiches)) p.fiches = [];
+  var n = p.fiches.length;               /* reprise là où ça s'était arrêté */
+  if(n) service('Reprise du dépouillement à la tranche ' + (n+1) + '.');
+  moteur(true, 'Dépouillement', p.nom + ' — tranche ' + (n+1) + ' sur ' + lots.length);
+
+  function tranche(essais){
+    if(n >= lots.length) return Promise.resolve();
+    $('tirage-detail').textContent = p.nom + ' — tranche ' + (n+1) + ' sur ' + lots.length;
+    var quoi = p.genre === 'scenario'
+      ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
+      : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
+    return demander([
+      { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
+      { role:'user', content: quoi + '\n\n--- PORTION ' + (n+1) + '/' + lots.length + ' ---\n' + lots[n] }
+    ], 0.4, 500).then(function(r){
+      p.fiches.push('[' + (n+1) + '/' + lots.length + '] ' + r.texte.trim());
+      n++;
+      sauver();                          /* chaque fiche est acquise */
+      return patienter(2200).then(function(){ return tranche(0); });  /* cadence : sous les 30 req/min de Groq */
+    }).catch(function(e){
+      var quota = /429|rate|quota|limit/i.test(e.message || '');
+      if(quota && (essais || 0) < 4){
+        var pause = 12000 * ((essais || 0) + 1);
+        $('tirage-detail').textContent = 'Quota atteint — reprise dans ' + Math.round(pause/1000) + ' s';
+        return patienter(pause).then(function(){ return tranche((essais || 0) + 1); });
+      }
+      throw e;
+    });
+  }
+
+  tranche(0).then(function(){
+    $('tirage-titre').textContent = 'Synthèse';
+    $('tirage-detail').textContent = p.fiches.length + ' tranches à recoudre';
+    return demander([
+      { role:'system', content: etat.consigne },
+      { role:'user', content:
+        'Voici mes fiches de dépouillement de « ' + p.nom +' », dans l\'ordre. ' +
+        'Reconstitue une note de lecture de réalisateur, 400 à 600 mots en texte suivi : ' +
+        'l\'histoire et son arc, les personnages et ce que je demanderai au jeu, les lieux et leur lumière, ' +
+        'les séquences qui portent le film, et ce qui sera difficile à tourner. Pas de question à la fin.\n\n' +
+        p.fiches.join('\n\n') }
+    ], 0.6, 1800);
+  }).then(function(r){
+    p.synthese = r.texte.trim();
+    rendrePieces(); sauver(); moteur(false);
+    service('« ' + p.nom + ' » dépouillé — la note de lecture entre dans le contexte.');
+  }).catch(function(e){
+    sauver(); rendrePieces(); moteur(false);
+    service(e.message + ' — les ' + p.fiches.length + ' fiches déjà faites sont gardées, relancez pour reprendre.', true);
+  });
+}
+
+/* ── Repérages : lecture d'image par le modèle de vision ── */
+function reduireImage(dataUrl, cote){
+  return new Promise(function(ok){
+    var im = new Image();
+    im.onload = function(){
+      var r = Math.min(1, cote / Math.max(im.width, im.height));
+      var c = document.createElement('canvas');
+      c.width  = Math.max(1, Math.round(im.width  * r));
+      c.height = Math.max(1, Math.round(im.height * r));
+      c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+      try { ok(c.toDataURL('image/jpeg', 0.82)); } catch(e){ ok(dataUrl); }
+    };
+    im.onerror = function(){ ok(dataUrl); };
+    im.src = dataUrl;
+  });
+}
+
+function verserImage(f){
+  if(!f) return;
+  var kMistral = sanitizeKey(safeStorage.getItem(VISION.cle) || '');
+  if(!kMistral){ service('Le repérage se lit avec Mistral : ajoutez cette clé dans les Réglages.', true); return; }
+
+  moteur(true, 'Lecture du repérage', f.name);
+  lireDataUrl(f).then(function(brut){
+    return reduireImage(brut, 1280).then(function(grand){
+      return reduireImage(brut, 160).then(function(vignette){
+        return { grand: grand, vignette: vignette };
+      });
+    });
+  }).then(function(img){
+    return xhrJson(VISION.url, {
+      model: VISION.modele,
+      max_tokens: 900,
+      temperature: 0.5,
+      messages: [
+        { role:'system', content: etat.consigne },
+        { role:'user', content: [
+          { type:'text', text:
+            'Ce repérage m\'est soumis pour le film. Lis-le en chef opérateur et en réalisateur, en texte suivi, 150 à 250 mots : ' +
+            'ce que montre le lieu, son architecture et ses matières, la lumière disponible et son orientation, ' +
+            'les axes de caméra qu\'il autorise, ce qu\'il coûterait à tourner, et ce que j\'en ferais dans ce film. ' +
+            'Pas de liste, pas de préambule.' },
+          { type:'image_url', image_url: img.grand }
+        ]}
+      ]
+    }, { Authorization: 'Bearer ' + kMistral }, 120000).then(function(r){
+      var t = r && r.choices && r.choices[0] && r.choices[0].message ? r.choices[0].message.content : '';
+      if(!t) throw new Error('Le modèle n\'a rien vu.');
+      etat.pieces.push({
+        id: 'p' + Date.now() + Math.floor(Math.random()*1000),
+        genre:'image', nom:f.name, poids:f.size,
+        vignette: img.vignette, texte: String(t).trim(), quand: Date.now()
+      });
+      rendrePieces(); sauver(); moteur(false);
+      service('Repérage lu et versé au classeur.');
+    });
+  }).catch(function(e){ moteur(false); service(e.message, true); });
+}
+
+function rendrePieces(){
+  var u = $('pieces'), h = '';
+  var n = etat.pieces.length;
+  for(var i=0;i<n;i++){
+    var p = etat.pieces[i];
+    var tete = p.genre === 'image'
+      ? '<img class="vignette" src="' + esc(p.vignette || '') + '" alt="">'
+      : '<div class="marque">' + esc(String(p.nom).split('.').pop().toUpperCase().slice(0,4)) + '</div>';
+
+    var etatTexte, apercu;
+    if(p.genre === 'image'){
+      etatTexte = 'Repérage lu par le modèle de vision';
+      apercu = String(p.texte || '');
+    } else {
+      var k = Math.round((p.signes || 0)/1000);
+      etatTexte = k + ' k signes' +
+        (p.nbBlocs ? ' · ' + p.nbBlocs + (p.genre === 'scenario' ? ' séquences' : ' chapitres') : '') +
+        (p.synthese ? ' · dépouillé' : (p.signes > MAX_CTX ? ' · lu en partie seulement' : ' · lu en entier'));
+      apercu = p.synthese || corpsDe(p).texte || p.apercu || '';
+    }
+
+    h += '<li>' + tete +
+      '<div class="quoi"><b>' + esc(p.nom) + '</b><span>' + esc(etatTexte) + '</span>' +
+      '<p>' + esc(apercu.slice(0,220)) + '…</p>' +
+      (p.genre !== 'image' && !p.synthese && p.signes > MAX_CTX
+        ? '<button class="mini" style="margin-top:8px" data-d="' + i + '">' +
+            ((p.fiches && p.fiches.length) ? 'Reprendre le dépouillement (' + p.fiches.length + ' fiches faites)' : 'Dépouiller en entier') +
+            '</button>' : '') +
+      '</div>' +
+      '<button class="retirer" data-p="' + i + '" aria-label="Retirer ' + esc(p.nom) + '">×</button></li>';
+  }
+  u.innerHTML = h;
+  $('compte-pieces').textContent = n ? (n + (n>1 ? ' pièces versées' : ' pièce versée')) : 'Rien de versé';
+}
+
+function majSequences(){
+  var s = $('f-sequence'), h = '<option value="">Séquence à découper — saisie libre</option>';
+  for(var i=0;i<etat.pieces.length;i++){
+    var p = etat.pieces[i];
+    if(p.genre === 'image') continue;
+    var b = corpsDe(p).blocs || [];
+    if(!b.length) continue;
+    h += '<optgroup label="' + esc(p.nom) + '">';
+    for(var j=0;j<b.length;j++){
+      h += '<option value="' + i + ':' + j + '">' + esc((j+1) + '. ' + b[j].entete) + '</option>';
+    }
+    h += '</optgroup>';
+  }
+  s.innerHTML = h;
+  s.parentNode.style.display = (etat.pieces.length && h.indexOf('optgroup') > -1) ? '' : 'none';
+}
+
+/* ── Conducteur : lecture directe des en-têtes de séquence ── */
+function analyserEntete(e){
+  var t = String(e || '').trim();
+  t = t.replace(/^\s*(?:s[ée]q(?:uence)?\.?\s*)?\d{1,3}\s*[.)\-–]?\s*/i, '');
+  var ie = 'INT';
+  var m = t.match(/^(INT\.?\s*\/\s*EXT\.?|EXT\.?\s*\/\s*INT\.?|I\.?\s*\/\s*E\.?|INT[ÉE]RIEUR|EXT[ÉE]RIEUR|INT\.?|EXT\.?)[\s.\-–—:]+/i);
+  if(m){
+    var b = m[1].toUpperCase();
+    ie = b.indexOf('/') > -1 ? 'I/E' : (b.indexOf('EXT') === 0 ? 'EXT' : 'INT');
+    t = t.slice(m[0].length);
+  } else { ie = '—'; }
+  var moment = '—';
+  var mm = t.match(/[\-–—]\s*([^\-–—]+)$/);
+  if(mm){
+    moment = mm[1].trim();
+    t = t.slice(0, mm.index).trim();
+  } else if(/\b(JOUR|NUIT|AUBE|CRÉPUSCULE|CREPUSCULE|SOIR|MATIN)\b/i.test(t)){
+    var mj = t.match(/\b(JOUR|NUIT|AUBE|CRÉPUSCULE|CREPUSCULE|SOIR|MATIN)\b/i);
+    moment = mj[1];
+    t = t.replace(mj[0], '').replace(/[\s,\-–—]+$/,'').trim();
+  }
+  return { decor: (t.replace(/[\s,.\-–—]+$/,'') || '—').toUpperCase(), ie: ie, moment: moment.toUpperCase() || '—' };
+}
+
+function sequencesDuFilm(){
+  var out = [];
+  for(var i=0;i<etat.pieces.length;i++){
+    var p = etat.pieces[i];
+    if(p.genre !== 'scenario') continue;
+    var b = corpsDe(p).blocs || [];
+    for(var j=0;j<b.length;j++){
+      var a = analyserEntete(b[j].entete);
+      out.push({
+        num: out.length + 1, entete: b[j].entete, decor: a.decor, ie: a.ie, moment: a.moment,
+        signes: b[j].texte.length, minutes: b[j].texte.length / 1500   /* une page ≈ une minute ≈ 1 500 signes */
+      });
+    }
+  }
+  return out;
+}
+
+function rendreConducteur(){
+  var s = sequencesDuFilm();
+  var c = $('corps-conducteur'), g = $('groupes-decor'), ch = $('conducteur-chiffres');
+  if(!s.length){
+    c.innerHTML = '';
+    $('conducteur-enveloppe').style.display = 'none';
+    ch.innerHTML = '<p class="vide">Versez un scénario au classeur : le conducteur se remplit tout seul à partir de ses en-têtes de séquence.</p>';
+    g.innerHTML = '';
+    return;
+  }
+  $('conducteur-enveloppe').style.display = '';
+
+  var h = '', total = 0, int = 0, nuit = 0, decors = {};
+  for(var i=0;i<s.length;i++){
+    var q = s[i];
+    total += q.minutes;
+    if(q.ie === 'INT') int++;
+    if(/NUIT|AUBE|CR[ÉE]PUSCULE|SOIR/.test(q.moment)) nuit++;
+    if(!decors[q.decor]) decors[q.decor] = { seqs:[], min:0, ie:q.ie };
+    decors[q.decor].seqs.push(q.num);
+    decors[q.decor].min += q.minutes;
+    h += '<tr><td class="num">' + q.num + '</td><td>' + esc(q.entete) + '</td><td>' + esc(q.decor) +
+         '</td><td>' + esc(q.ie) + '</td><td>' + esc(q.moment) + '</td><td>' + q.signes +
+         '</td><td>' + (q.minutes < 1 ? Math.round(q.minutes*60) + ' s' : q.minutes.toFixed(1) + ' min') + '</td></tr>';
+  }
+  c.innerHTML = h;
+
+  var noms = Object.keys(decors).sort(function(a,b){ return decors[b].min - decors[a].min; });
+  ch.innerHTML =
+    '<div class="chiffre"><b>' + s.length + '</b><span>séquences</span></div>' +
+    '<div class="chiffre"><b>' + Math.round(total) + '</b><span>minutes estimées</span></div>' +
+    '<div class="chiffre"><b>' + noms.length + '</b><span>décors distincts</span></div>' +
+    '<div class="chiffre"><b>' + int + '/' + (s.length - int) + '</b><span>intérieurs / extérieurs</span></div>' +
+    '<div class="chiffre"><b>' + nuit + '</b><span>séquences de nuit</span></div>';
+
+  var gh = '';
+  for(var k=0;k<noms.length;k++){
+    var d = decors[noms[k]];
+    gh += '<div class="groupe"><b>' + esc(noms[k]) + '</b><span>' +
+          d.seqs.length + (d.seqs.length > 1 ? ' séquences' : ' séquence') +
+          ' · ' + d.min.toFixed(1) + ' min · séq. ' + d.seqs.join(', ') + '</span></div>';
+  }
+  g.innerHTML = gh;
+}
+
+/* ── Storyboard : une vue par plan, images Pollinations ──── */
+function rendreStoryboard(vues){
+  var z = $('storyboard'), h = '';
+  for(var i=0;i<vues.length;i++){
+    h += '<figure class="vue-plan" style="margin:0">' +
+         '<img src="' + esc(vues[i].url) + '" alt="Plan ' + (i+1) + '" loading="lazy">' +
+         '<figcaption class="pied"><b>Plan ' + (i+1) + '</b>' +
+         '<span>' + esc(vues[i].legende) + '</span></figcaption></figure>';
+  }
+  z.innerHTML = h;
+}
+
+function tirerStoryboard(){
+  if(!etat.plans.length){ service('Découpez d\'abord une séquence.'); return; }
+  var teintes = ((etat.da && etat.da.palette) || []).map(function(t){ return t.nom; }).slice(0,3).join(', ');
+  var vues = [];
+  for(var i=0;i<Math.min(etat.plans.length, 24); i++){
+    var p = etat.plans[i];
+    var mots = [
+      'storyboard frame, cinematic film still',
+      p.echelle, p.angle, p.focale ? p.focale + ' lens' : '',
+      p.action, etat.genre, etat.decor,
+      teintes ? 'colour palette ' + teintes : '',
+      etat.daTexte ? etat.daTexte.slice(0,160) : '',
+      'no text, no watermark, no letterbox'
+    ].filter(Boolean).join(', ');
+    vues.push({
+      url: 'https://image.pollinations.ai/prompt/' + encodeURIComponent(mots.slice(0,900)) +
+           '?width=1024&height=576&nologo=true&seed=' + (1000 + i),
+      legende: [p.echelle, p.mouvement, p.angle].filter(Boolean).join(' · ')
+    });
+  }
+  etat.storyboard = vues;
+  rendreStoryboard(vues); sauver();
+  service(vues.length + ' vues demandées — elles apparaissent au fil du chargement.');
+}
+
+/* ── Clap de chargement ─────────────────────────────────── */
+function moteur(actif, titre, detail){
+  occupe = !!actif;
+  $('tirage').className = 'tirage' + (actif ? ' on' : '');
+  if(titre)  $('tirage-titre').textContent = titre;
+  $('tirage-detail').textContent = detail || '';
+  var b = document.querySelectorAll('.btn, .mini');
+  for(var i=0;i<b.length;i++) b[i].disabled = !!actif;
+}
+
+/* ── Persistance ────────────────────────────────────────── */
+function sauver(){
+  try { safeStorage.setItem(STOCK, JSON.stringify(etat)); }
+  catch(e){ service('Mémoire du navigateur pleine : retirez une pièce du classeur pour continuer à sauvegarder.', true); }
+}
+function charger(){
+  try {
+    var b = safeStorage.getItem(STOCK);
+    if(!b) return;
+    var o = JSON.parse(b);
+    Object.keys(o).forEach(function(c){ if(o[c] != null) etat[c] = o[c]; });
+    if(!etat.consigne) etat.consigne = CONSIGNE_PAR_DEFAUT;
+    if(!Array.isArray(etat.pieces)) etat.pieces = [];
+    if(!etat.fil || !etat.fil.length) etat.fil = [{ qui:'real', texte:ACCUEIL }];
+  } catch(e){}
+}
+
+/* ── Rendus ─────────────────────────────────────────────── */
+function rendreFil(){
+  var h = '';
+  for(var i=0;i<etat.fil.length;i++){
+    var t = etat.fil[i];
+    h += '<div class="tour ' + (t.qui === 'real' ? 'real' : 'prod') + '">' +
+         '<div class="qui">' + (t.qui === 'real' ? 'Vision-IA' : 'Producteur') + '</div>' +
+         '<div class="dit">' + esc(t.texte) + '</div></div>';
+  }
+  $('fil').innerHTML = h;
+  var d = $('fil').lastElementChild;
+  if(d) d.scrollIntoView({ block:'nearest' });
+}
+
+function rendreDecoupage(){
+  var c = $('corps-decoupage'), h = '';
+  for(var i=0;i<etat.plans.length;i++){
+    var p = etat.plans[i];
+    h += '<tr data-i="' + i + '">' +
+      '<td class="num">' + (i+1) + '</td>' +
+      '<td contenteditable="true" data-c="echelle">'   + esc(p.echelle)   + '</td>' +
+      '<td contenteditable="true" data-c="mouvement">' + esc(p.mouvement) + '</td>' +
+      '<td contenteditable="true" data-c="focale">'    + esc(p.focale)    + '</td>' +
+      '<td contenteditable="true" data-c="angle">'     + esc(p.angle)     + '</td>' +
+      '<td contenteditable="true" data-c="duree">'     + esc(p.duree)     + '</td>' +
+      '<td contenteditable="true" data-c="action">'    + esc(p.action)    + '</td></tr>';
+  }
+  c.innerHTML = h;
+  var s = 0;
+  for(var j=0;j<etat.plans.length;j++){
+    var m = String(etat.plans[j].duree || '').match(/[\d.,]+/);
+    if(m) s += parseFloat(m[0].replace(',','.')) || 0;
+  }
+  $('total-plans').textContent = etat.plans.length
+    ? etat.plans.length + ' plans · environ ' + Math.round(s) + ' s à l\'écran'
+    : '';
+}
+
+function rendreDa(){
+  var n = $('nuancier'), h = '';
+  var pal = (etat.da && etat.da.palette) || [];
+  for(var i=0;i<pal.length;i++){
+    var t = pal[i], hex = /^#[0-9a-f]{6}$/i.test(String(t.hex||'')) ? t.hex : '#555555';
+    h += '<div class="teinte"><div class="aplat" style="background:' + hex + '"></div>' +
+         '<div class="legende"><b>' + esc(t.nom || '') + '</b><code>' + esc(hex) + '</code>' +
+         (t.usage ? '<div>' + esc(t.usage) + '</div>' : '') + '</div></div>';
+  }
+  n.innerHTML = h;
+  $('sortie-da').textContent = etat.daTexte || '';
+}
+
+function rendreDossier(){
+  $('sortie-dossier').textContent = dossierMarkdown();
+}
+
+function rendreTout(){
+  $('f-titre').value  = etat.titre;
+  $('f-genre').value  = etat.genre;
+  $('f-format').value = etat.format;
+  $('f-decor').value  = etat.decor;
+  $('f-budget').value = etat.budget;
+  $('f-scene').value  = etat.scene;
+  $('sortie-note').textContent = etat.note;
+  $('sortie-prod').textContent = etat.prod;
+  rendreFil(); rendrePieces(); majSequences(); rendreDecoupage(); rendreConducteur();
+  rendreStoryboard(etat.storyboard || []); rendreDa(); rendreDossier(); majVoyant();
+  marquerPhases();
+}
+
+function marquerPhases(){
+  var fait = { note:!!etat.note, decoupage:etat.plans.length>0, da:!!etat.daTexte, prod:!!etat.prod };
+  var b = document.querySelectorAll('.phase');
+  for(var i=0;i<b.length;i++){
+    var v = b[i].getAttribute('data-vue');
+    if(fait[v]) b[i].classList.add('fait'); else b[i].classList.remove('fait');
+  }
+}
+
+/* ── Dossier ────────────────────────────────────────────── */
+function dossierMarkdown(){
+  var l = [];
+  l.push('# ' + (etat.titre || 'Film sans titre'));
+  l.push('');
+  l.push('- Genre : ' + (etat.genre || '—'));
+  l.push('- Format : ' + etat.format);
+  l.push('- Tournage : ' + etat.decor);
+  if(etat.budget) l.push('- Moyens : ' + etat.budget);
+  l.push('');
+  if(etat.note){ l.push('## Note d\'intention',''); l.push(etat.note, ''); }
+  if(etat.plans.length){
+    l.push('## Découpage technique','');
+    if(etat.scene) l.push('_' + etat.scene + '_','');
+    l.push('| Plan | Échelle | Mouvement | Focale | Angle | Durée | Action et intention |');
+    l.push('|---|---|---|---|---|---|---|');
+    for(var i=0;i<etat.plans.length;i++){
+      var p = etat.plans[i];
+      l.push('| ' + (i+1) + ' | ' + p.echelle + ' | ' + p.mouvement + ' | ' + p.focale +
+             ' | ' + p.angle + ' | ' + p.duree + ' | ' + String(p.action).replace(/\|/g,'/') + ' |');
+    }
+    l.push('');
+  }
+  if(etat.daTexte){
+    l.push('## Parti pris d\'image','');
+    var pal = (etat.da && etat.da.palette) || [];
+    for(var j=0;j<pal.length;j++) l.push('- `' + pal[j].hex + '` ' + pal[j].nom + (pal[j].usage ? ' — ' + pal[j].usage : ''));
+    if(pal.length) l.push('');
+    l.push(etat.daTexte, '');
+  }
+  if(etat.prod){ l.push('## Directives de production',''); l.push(etat.prod, ''); }
+  var rep = (etat.pieces || []).filter(function(p){ return p.genre === 'image'; });
+  if(rep.length){
+    l.push('## Repérages','');
+    for(var k=0;k<rep.length;k++) l.push('### ' + rep[k].nom, '', rep[k].texte, '');
+  }
+  var docs = (etat.pieces || []).filter(function(p){ return p.genre !== 'image'; });
+  if(docs.length){
+    l.push('## Pièces versées','');
+    for(var d=0;d<docs.length;d++){
+      l.push('- ' + docs[d].nom + ' — ' + Math.round((docs[d].signes||0)/1000) + ' k signes' +
+             (docs[d].nbBlocs ? ', ' + docs[d].nbBlocs + ' blocs' : ''));
+    }
+    l.push('');
+    for(var e=0;e<docs.length;e++){
+      if(docs[e].synthese){ l.push('### Note de lecture — ' + docs[e].nom, '', docs[e].synthese, ''); }
+    }
+  }
+  l.push('---','Dossier établi par Vision-IA · Studio Niko Design');
+  return l.join('\n');
+}
+
+function telecharger(nom, contenu, type){
+  try {
+    var b = new Blob([contenu], { type: type || 'text/plain;charset=utf-8' });
+    var u = URL.createObjectURL(b);
+    var a = document.createElement('a');
+    a.href = u; a.download = nom;
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ URL.revokeObjectURL(u); a.remove(); }, 400);
+    service('Fichier ' + nom + ' enregistré.');
+  } catch(e){ service('Téléchargement refusé par le navigateur.', true); }
+}
+
+function nomFichier(ext){
+  var base = (etat.titre || 'vision-ia').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || 'vision-ia';
+  return base + '.' + ext;
+}
+
+/* ── Actions ────────────────────────────────────────────── */
+function envoyer(){
+  if(occupe) return;
+  var v = $('f-message').value.trim();
+  if(!v){ service('Écrivez quelque chose au réalisateur.'); return; }
+  etat.fil.push({ qui:'prod', texte:v });
+  $('f-message').value = '';
+  rendreFil(); sauver();
+
+  var msgs = socle();
+  for(var i=Math.max(0, etat.fil.length-14); i<etat.fil.length; i++){
+    msgs.push({ role: etat.fil[i].qui === 'real' ? 'assistant' : 'user', content: etat.fil[i].texte });
+  }
+  moteur(true, 'Le réalisateur réfléchit', 'Plan de travail en cours');
+  etat.fil.push({ qui:'real', texte:'' });
+  var rang = etat.fil.length - 1;
+  demanderFlux(msgs, 0.75, 1600, function(t){
+    etat.fil[rang].texte = t;
+    if(occupe){ moteur(false); }        /* on lève le clap dès le premier mot */
+    rendreFil();
+  }).then(function(r){
+    etat.fil[rang].texte = r.texte;
+    rendreFil(); sauver(); moteur(false);
+  }).catch(function(e){
+    etat.fil.splice(rang, 1); rendreFil();
+    moteur(false); service(e.message, true);
+  });
+}
+
+function ecrireNote(){
+  if(occupe) return;
+  var m = socle();
+  m.push({ role:'user', content:
+    'Rédige la note d\'intention du film. Quatre parties nettes, sans titres numérotés : le sujet et pourquoi il vaut d\'être filmé ; ' +
+    'le parti pris de mise en scène ; le traitement de l\'image et du son ; la direction d\'acteurs. ' +
+    'Texte suivi, 450 à 650 mots, à la première personne, ton de cinéaste. Aucune formule d\'assistant, aucune question à la fin.' });
+  moteur(true, 'Écriture de la note', 'Parti pris en cours de formulation');
+  onglet('note');
+  demanderFlux(m, 0.8, 1800, function(t){
+    if(occupe) moteur(false);
+    $('sortie-note').textContent = t;
+  }).then(function(r){
+    etat.note = r.texte.trim();
+    $('sortie-note').textContent = etat.note;
+    marquerPhases(); rendreDossier(); sauver(); moteur(false);
+    service('Note écrite par ' + r.moteur + '.');
+  }).catch(function(e){ moteur(false); service(e.message, true); });
+}
+
+function decouper(ajout){
+  if(occupe) return;
+  var choix = $('f-sequence').value, texteSeq = '', s = $('f-scene').value.trim();
+  if(choix){
+    var d = choix.split(':'), p = etat.pieces[parseInt(d[0],10)];
+    var b = p && (corpsDe(p).blocs || [])[parseInt(d[1],10)];
+    if(b){
+      texteSeq = b.texte.slice(0, 14000);
+      if(!s) s = b.entete;
+    }
+  }
+  if(!s && !texteSeq){ service('Choisissez une séquence, ou décrivez-la.'); return; }
+  etat.scene = s;
+  var m = socle();
+  var consigne =
+    'Découpe cette séquence en plans : ' + s +
+    (texteSeq ? '\n\nTexte intégral de la séquence, à respecter à la lettre :\n"""\n' + texteSeq + '\n"""' : '') + '\n\n' +
+    'Réponds UNIQUEMENT par un tableau JSON, sans texte autour, sans balises de code. ' +
+    'Chaque objet : {"echelle","mouvement","focale","angle","duree","action"}. ' +
+    'echelle = valeur de plan française (très gros plan, gros plan, plan rapproché, plan américain, plan moyen, plan d\'ensemble, plan général). ' +
+    'mouvement = fixe, panoramique, travelling avant/latéral, steadicam, grue, caméra portée… ' +
+    'focale en mm. angle = à hauteur, plongée, contre-plongée, incliné. duree en secondes, par exemple "6 s". ' +
+    'action = ce qui se passe et l\'intention de mise en scène, deux phrases au plus. ' +
+    'Entre 8 et 16 plans, cohérents avec les moyens annoncés.';
+  if(ajout && etat.plans.length){
+    consigne += '\n\nPlans déjà établis, à ne pas répéter : ' +
+      etat.plans.map(function(p){ return p.echelle + ' / ' + p.action; }).join(' ; ') +
+      '\nPropose la suite du découpage.';
+  }
+  m.push({ role:'user', content: consigne });
+  moteur(true, 'Découpage en cours', 'Échelles, focales, mouvements');
+  demander(m, 0.6, 2600).then(function(r){
+    var t = extraireJson(r.texte);
+    if(!t.length) throw new Error('Le modèle n\'a produit aucun plan.');
+    var neufs = t.map(function(p){
+      return {
+        echelle:   String(p.echelle   || ''),
+        mouvement: String(p.mouvement || ''),
+        focale:    String(p.focale    || ''),
+        angle:     String(p.angle     || ''),
+        duree:     String(p.duree     || ''),
+        action:    String(p.action    || '')
+      };
+    });
+    etat.plans = ajout ? etat.plans.concat(neufs) : neufs;
+    rendreDecoupage(); marquerPhases(); rendreDossier(); sauver(); moteur(false);
+    service(neufs.length + ' plans découpés par ' + r.moteur + '.');
+  }).catch(function(e){ moteur(false); service(e.message, true); });
+}
+
+function fixerImage(){
+  if(occupe) return;
+  var m = socle();
+  m.push({ role:'user', content:
+    'Fixe le parti pris d\'image du film. Réponds UNIQUEMENT par un objet JSON, sans texte autour, sans balises de code : ' +
+    '{"palette":[{"hex":"#rrggbb","nom":"...","usage":"..."}],"texte":"..."}. ' +
+    'La palette compte 5 ou 6 teintes réellement tenables au tournage et à l\'étalonnage. ' +
+    'Le champ texte fait 250 à 400 mots en texte suivi : matière de l\'image (support, grain, définition), ' +
+    'ambiance lumineuse, rapport de contraste, optiques, format et ratio, deux ou trois références de films assumées et ce qu\'on leur emprunte.' });
+  moteur(true, 'Étalonnage du parti pris', 'Palette, lumière, optiques');
+  demander(m, 0.75, 2000).then(function(r){
+    var o = extraireJson(r.texte);
+    etat.da = { palette: Array.isArray(o.palette) ? o.palette : [] };
+    etat.daTexte = String(o.texte || '').trim();
+    rendreDa(); marquerPhases(); rendreDossier(); sauver(); moteur(false);
+    service('Parti pris fixé par ' + r.moteur + '.');
+  }).catch(function(e){ moteur(false); service(e.message, true); });
+}
+
+function directives(){
+  if(occupe) return;
+  etat.budget = $('f-budget').value.trim();
+  var m = socle();
+  m.push({ role:'user', content:
+    'Établis les directives de production, réellement applicables avec les moyens annoncés. ' +
+    'Quatre blocs en listes : casting (profils recherchés, ce que je demande au jeu) ; repérages (types de lieux, lumière naturelle, horaires, contraintes) ; ' +
+    'équipe et matériel (postes indispensables, caméra, optiques, machinerie, son) ; musique et son (parti pris, quand la musique entre, quand elle se tait). ' +
+    'Termine par trois risques de tournage et la parade pour chacun. Pas de question à la fin.' });
+  moteur(true, 'Rédaction des directives', 'Casting, repérages, équipe, son');
+  demanderFlux(m, 0.7, 2200, function(t){
+    if(occupe) moteur(false);
+    $('sortie-prod').textContent = t;
+  }).then(function(r){
+    etat.prod = r.texte.trim();
+    $('sortie-prod').textContent = etat.prod;
+    marquerPhases(); rendreDossier(); sauver(); moteur(false);
+    service('Directives établies par ' + r.moteur + '.');
+  }).catch(function(e){ moteur(false); service(e.message, true); });
+}
+
+/* ── Câblage ────────────────────────────────────────────── */
+function onglet(vue){
+  var v = document.querySelectorAll('.vue');
+  for(var i=0;i<v.length;i++) v[i].classList.toggle('active', v[i].id === 'vue-' + vue);
+  var b = document.querySelectorAll('.phase');
+  for(var j=0;j<b.length;j++) b[j].setAttribute('aria-selected', b[j].getAttribute('data-vue') === vue ? 'true' : 'false');
+  if(vue === 'dossier') rendreDossier();
+  if(vue === 'conducteur') rendreConducteur();
+  window.scrollTo(0,0);
+}
+
+function demarrer(){
+  charger();
+  rendreTout();
+  chargerCorpus();
+
+  var b = document.querySelectorAll('.phase');
+  for(var i=0;i<b.length;i++){
+    b[i].addEventListener('click', function(){ onglet(this.getAttribute('data-vue')); });
+  }
+
+  ['f-titre','f-genre','f-format','f-decor'].forEach(function(id){
+    $(id).addEventListener('change', function(){
+      etat.titre = $('f-titre').value.trim();
+      etat.genre = $('f-genre').value.trim();
+      etat.format = $('f-format').value;
+      etat.decor = $('f-decor').value;
+      sauver(); rendreDossier();
+    });
+  });
+  $('f-scene').addEventListener('change', function(){ etat.scene = this.value; sauver(); });
+  $('f-budget').addEventListener('change', function(){ etat.budget = this.value.trim(); sauver(); });
+
+  $('b-envoyer').addEventListener('click', envoyer);
+  $('f-message').addEventListener('keydown', function(e){
+    if(e.key === 'Enter' && (e.ctrlKey || e.metaKey)){ e.preventDefault(); envoyer(); }
+  });
+  $('b-note').addEventListener('click', ecrireNote);
+  $('b-note-copier').addEventListener('click', function(){
+    if(!etat.note){ service('La note n\'est pas encore écrite.'); return; }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(etat.note).then(function(){ service('Note copiée.'); })
+        .catch(function(){ service('Copie refusée par le navigateur.', true); });
+    } else { service('Copie indisponible ici.', true); }
+  });
+  $('b-decoupage').addEventListener('click', function(){ decouper(false); });
+  $('b-decoupage-plus').addEventListener('click', function(){ decouper(true); });
+  $('b-da').addEventListener('click', fixerImage);
+  $('b-prod').addEventListener('click', directives);
+
+  $('corps-decoupage').addEventListener('input', function(e){
+    var td = e.target;
+    if(!td || !td.getAttribute || !td.getAttribute('data-c')) return;
+    var i = parseInt(td.parentNode.getAttribute('data-i'), 10);
+    if(isNaN(i) || !etat.plans[i]) return;
+    etat.plans[i][td.getAttribute('data-c')] = td.textContent;
+    sauver();
+  });
+
+  $('b-doc').addEventListener('click', function(){ $('entree-doc').click(); });
+  $('b-image').addEventListener('click', function(){ $('entree-image').click(); });
+  $('entree-doc').addEventListener('change', function(){
+    var f = this.files && this.files[0];
+    this.value = '';
+    verserDocument(f);
+  });
+  $('entree-image').addEventListener('change', function(){
+    var f = this.files && this.files[0];
+    this.value = '';
+    verserImage(f);
+  });
+  $('pieces').addEventListener('click', function(e){
+    var b = e.target;
+    if(!b || !b.getAttribute) return;
+    if(b.getAttribute('data-d') !== null){
+      depouiller(parseInt(b.getAttribute('data-d'), 10));
+      return;
+    }
+    if(b.getAttribute('data-p') === null) return;
+    var i = parseInt(b.getAttribute('data-p'), 10);
+    if(isNaN(i) || !etat.pieces[i]) return;
+    var piece = etat.pieces[i];
+    etat.pieces.splice(i, 1);
+    delete corpus[piece.id];
+    coffre.oter(piece.id);
+    rendrePieces(); majSequences(); rendreConducteur(); sauver();
+    service(piece.nom + ' retiré du classeur.');
+  });
+
+  $('f-sequence').addEventListener('change', function(){
+    if(!this.value){ return; }
+    var d = this.value.split(':'), p = etat.pieces[parseInt(d[0],10)];
+    var b = p && (corpsDe(p).blocs || [])[parseInt(d[1],10)];
+    if(b){ $('f-scene').value = b.entete; etat.scene = b.entete; sauver(); }
+  });
+
+  var cl = $('classeur');
+  ['dragenter','dragover'].forEach(function(ev){
+    cl.addEventListener(ev, function(e){ e.preventDefault(); cl.classList.add('survol'); });
+  });
+  ['dragleave','drop'].forEach(function(ev){
+    cl.addEventListener(ev, function(e){ e.preventDefault(); cl.classList.remove('survol'); });
+  });
+  cl.addEventListener('drop', function(e){
+    if(occupe) return;
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if(!f) return;
+    if(/^image\//.test(f.type || '')) verserImage(f); else verserDocument(f);
+  });
+
+  $('b-storyboard').addEventListener('click', tirerStoryboard);
+  $('b-storyboard-vider').addEventListener('click', function(){
+    etat.storyboard = []; rendreStoryboard([]); sauver();
+  });
+
+  $('b-reprendre').addEventListener('click', function(){ $('entree-json').click(); });
+  $('entree-json').addEventListener('change', function(){
+    var f = this.files && this.files[0];
+    this.value = '';
+    if(!f) return;
+    if(!window.confirm('Reprendre « ' + f.name + ' » ? Le film actuellement ouvert sera remplacé.')) return;
+    moteur(true, 'Reprise du film', f.name);
+    lireTexte(f).then(function(t){
+      var o = JSON.parse(t);
+      if(!o || typeof o !== 'object' || !('fil' in o)) throw new Error('Ce fichier n\'est pas une sauvegarde Vision-IA.');
+      var grains = o.corpus || {};
+      delete o.corpus;
+      Object.keys(etat).forEach(function(c){ if(o[c] != null) etat[c] = o[c]; });
+      if(!Array.isArray(etat.pieces)) etat.pieces = [];
+      if(!etat.consigne) etat.consigne = CONSIGNE_PAR_DEFAUT;
+      corpus = {};
+      var suite = coffre.vider();
+      Object.keys(grains).forEach(function(id){
+        corpus[id] = grains[id];
+        suite = suite.then(function(){ return coffre.poser(id, grains[id]); });
+      });
+      return suite;
+    }).then(function(){
+      sauver(); rendreTout(); rendreStoryboard(etat.storyboard || []); onglet('plateau');
+      moteur(false); service('Film repris.');
+    }).catch(function(e){
+      moteur(false);
+      service(/JSON/.test(e.message) ? 'Fichier illisible : ce n\'est pas du JSON valide.' : e.message, true);
+    });
+  });
+
+  $('b-md').addEventListener('click', function(){ telecharger(nomFichier('md'), dossierMarkdown(), 'text/markdown;charset=utf-8'); });
+  $('b-json').addEventListener('click', function(){
+    var paquet = JSON.parse(JSON.stringify(etat));
+    paquet.corpus = corpus;               /* les textes intégraux voyagent avec le film */
+    telecharger(nomFichier('json'), JSON.stringify(paquet, null, 2), 'application/json');
+  });
+  $('b-imprimer').addEventListener('click', function(){ window.print(); });
+
+  $('b-reglages').addEventListener('click', function(){
+    $('k-groq').value     = safeStorage.getItem(PROVIDERS.groq.cle)     || '';
+    $('k-cerebras').value = safeStorage.getItem(PROVIDERS.cerebras.cle) || '';
+    $('k-mistral').value  = safeStorage.getItem(PROVIDERS.mistral.cle)  || '';
+    $('f-consigne').value = etat.consigne;
+    $('voile-reglages').className = 'voile on';
+  });
+  $('b-fermer').addEventListener('click', function(){ $('voile-reglages').className = 'voile'; });
+  $('voile-reglages').addEventListener('click', function(e){
+    if(e.target === this) this.className = 'voile';
+  });
+  $('b-enregistrer').addEventListener('click', function(){
+    ORDRE.forEach(function(id){
+      var v = sanitizeKey($('k-' + id).value);
+      if(v) safeStorage.setItem(PROVIDERS[id].cle, v); else safeStorage.removeItem(PROVIDERS[id].cle);
+    });
+    etat.consigne = $('f-consigne').value.trim() || CONSIGNE_PAR_DEFAUT;
+    sauver(); majVoyant();
+    $('voile-reglages').className = 'voile';
+    service(cles().length ? 'Réglages enregistrés.' : 'Aucune clé : le réalisateur restera muet.', !cles().length);
+  });
+
+  $('b-vider').addEventListener('click', function(){
+    if(!window.confirm('Effacer le film en cours, classeur compris ? Les clés sont conservées.')) return;
+    etat.titre=''; etat.genre=''; etat.budget=''; etat.scene=''; etat.pieces=[];
+    etat.storyboard=[]; corpus = {}; coffre.vider();
+    etat.note=''; etat.plans=[]; etat.da=null; etat.daTexte=''; etat.prod='';
+    etat.fil=[{ qui:'real', texte:ACCUEIL }];
+    sauver(); rendreTout(); onglet('plateau');
+    service('Nouveau film.');
+  });
+
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape') $('voile-reglages').className = 'voile';
+  });
+
+  if(!cles().length) service('Ajoutez une clé dans les Réglages pour réveiller le réalisateur.');
+
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register('sw.js').catch(function(){});
+    });
+  }
+}
+
+demarrer();
+</script>
+</body>
+</html>
