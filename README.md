@@ -74,3 +74,14 @@ Depuis le découpage, chaque plan devient une vue générée par Pollinations (g
 - Cadence de 2,2 s entre les tranches pour rester sous les 30 requêtes/minute de Groq, et réessai avec attente croissante (12, 24, 36, 48 s) sur erreur de quota.
 - Note d'intention, directives et dialogue s'**écrivent en direct** (SSE lu par `XMLHttpRequest.onprogress`, conforme à la règle XHR).
 - Service worker **versionné**, `index.html` servi réseau d'abord : une mise en ligne n'est plus prisonnière du cache.
+
+## Durcissement (v1.1)
+
+- **Verrou de génération corrigé.** Le clap s'effaçait au premier mot en remettant `occupe` à faux : les boutons redevenaient actifs pendant l'écriture, et un second envoi écrasait le premier. Le clap et le verrou sont désormais deux choses distinctes — une barre « Vision-IA écrit… » remplace le clap, les boutons restent bloqués.
+- **Bouton Couper.** Toute génération est interruptible (`XMLHttpRequest.abort()`, touche Échap aussi). Le texte déjà écrit est conservé, pas jeté. Une interruption ne déclenche pas la bascule vers le fournisseur suivant.
+- **Chaîne de fournisseurs unifiée.** Les modes streaming et non-streaming parcouraient la chaîne dans deux fonctions jumelles : ce qui diverge finit par diverger en bug. Une seule fonction `chaine()` désormais.
+- **Rendu incrémental du dialogue.** Le fil entier était reconstruit à chaque token (`innerHTML` + `scrollIntoView`) — injouable sur mobile. Seul le dernier tour est mis à jour.
+- **Parseur SSE testé** sur des trames coupées en plein milieu de JSON : recollage vérifié sous node.
+- **Storyboard** : état de chargement visible et repli propre quand une vue ne revient pas.
+- **pdf.js** : garde-fou de 45 s si le worker du CDN est injoignable, au lieu d'une attente infinie.
+- **Clavier** : flèches gauche/droite entre les phases, Échap ferme les réglages puis coupe une génération, focus rendu au bouton d'origine.
