@@ -188,6 +188,9 @@ td[contenteditable]:focus{background:#fff6d8;outline:1px solid var(--tungstene)}
 .storyboard:empty{display:none}
 .vue-plan{border:1px solid var(--trait);background:var(--console);border-radius:2px;overflow:hidden}
 .vue-plan img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#0a1015}
+.vue-plan img.chargement{background:linear-gradient(90deg,#0a1015 25%,#16222c 50%,#0a1015 75%);background-size:200% 100%;animation:vague 1.4s infinite}
+.vue-plan img.manquee{object-fit:contain;opacity:.35}
+@keyframes vague{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .vue-plan .pied{padding:8px 10px;font-size:12px;line-height:1.45}
 .vue-plan .pied b{font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:.05em;display:block}
 .vue-plan .pied span{color:var(--sourdine);font-size:11px}
@@ -230,6 +233,17 @@ td[contenteditable]:focus{background:#fff6d8;outline:1px solid var(--tungstene)}
 @keyframes claquer{0%,55%{transform:rotate(-26deg)}70%,100%{transform:rotate(0deg)}}
 .tirage p{font-family:'Bebas Neue',sans-serif;font-size:21px;letter-spacing:.1em;margin:0;color:var(--encre)}
 .tirage small{color:var(--sourdine);font-size:13px}
+
+/* ── Écriture en cours : le clap s'efface, la barre reste ── */
+#ecriture{
+  position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(180%);
+  background:var(--console);border:1px solid var(--trait);border-left:3px solid var(--tally);
+  padding:9px 12px;display:flex;align-items:center;gap:11px;font-size:13px;z-index:65;
+  transition:transform .28s;max-width:min(92vw,420px);
+}
+#ecriture.on{transform:translateX(-50%) translateY(0)}
+.pouls{width:8px;height:8px;border-radius:50%;background:var(--tally);flex:none;animation:pouls 1.1s ease-in-out infinite}
+@keyframes pouls{0%,100%{opacity:.25}50%{opacity:1}}
 
 /* ── Message de service ──────────────────────────────────── */
 #service{
@@ -481,6 +495,12 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
   <small id="tirage-detail"></small>
 </div>
 
+<div id="ecriture" aria-live="polite">
+  <span class="pouls" aria-hidden="true"></span>
+  <span id="ecriture-quoi">Vision-IA écrit…</span>
+  <button class="mini" id="b-couper">Couper</button>
+</div>
+
 <div id="service" role="status" aria-live="polite"></div>
 
 <script>
@@ -566,7 +586,16 @@ function majVoyant(){
     : 'Aucune clé';
 }
 
-/* ── Appel modèle : XHR, chaîne de secours ──────────────── */
+/* ── Appel modèle : XHR, chaîne de secours, interruption ── */
+var enCours = null;   /* la requête vivante, pour pouvoir la couper */
+
+function couper(){
+  if(!enCours) return;
+  var x = enCours; enCours = null;
+  try { x.abort(); } catch(e){}
+}
+function interrompu(){ var e = new Error('Génération coupée.'); e.coupe = true; return e; }
+
 function xhrJson(url, corps, entetes, delai){
   return new Promise(function(resoudre, rejeter){
     var x = new XMLHttpRequest();
@@ -574,45 +603,60 @@ function xhrJson(url, corps, entetes, delai){
     x.timeout = delai || 90000;
     x.setRequestHeader('Content-Type','application/json');
     Object.keys(entetes||{}).forEach(function(h){ try{ x.setRequestHeader(h, entetes[h]); }catch(e){} });
+    enCours = x;
+    function fini(){ if(enCours === x) enCours = null; }
     x.onload = function(){
+      fini();
       if(x.status >= 200 && x.status < 300){
         try { resoudre(JSON.parse(x.responseText)); }
         catch(e){ rejeter(new Error('Réponse illisible du modèle.')); }
       } else {
         var d = '';
         try { d = (JSON.parse(x.responseText).error || {}).message || ''; } catch(e){}
-        rejeter(new Error('HTTP ' + x.status + (d ? ' · ' + d : '')));
+        var err = new Error('HTTP ' + x.status + (d ? ' · ' + d : ''));
+        err.code = x.status;
+        rejeter(err);
       }
     };
-    x.onerror   = function(){ rejeter(new Error('Réseau injoignable.')); };
-    x.ontimeout = function(){ rejeter(new Error('Délai dépassé.')); };
+    x.onabort   = function(){ fini(); rejeter(interrompu()); };
+    x.onerror   = function(){ fini(); rejeter(new Error('Réseau injoignable.')); };
+    x.ontimeout = function(){ fini(); rejeter(new Error('Délai dépassé.')); };
     x.send(JSON.stringify(corps));
   });
 }
 
-function demander(messages, temperature, maxJetons){
+/* Un seul parcours de la chaîne pour les deux modes : ce qui
+   diverge finit toujours par diverger en bug. */
+function chaine(tenter){
   var dispo = cles();
   if(!dispo.length) return Promise.reject(new Error('Aucune clé enregistrée. Ouvrez les Réglages.'));
   var i = 0, dernier = null;
   function essai(){
     if(i >= dispo.length) return Promise.reject(dernier || new Error('Tous les moteurs ont refusé.'));
-    var p = PROVIDERS[dispo[i].id], k = dispo[i].k;
-    return xhrJson(p.url, {
-      model: p.modele,
-      messages: messages,
-      temperature: (temperature == null ? 0.7 : temperature),
-      max_tokens: maxJetons || 2400
-    }, { Authorization: 'Bearer ' + k }).then(function(r){
-      var t = r && r.choices && r.choices[0] && r.choices[0].message ? r.choices[0].message.content : '';
+    var p = PROVIDERS[dispo[i].id];
+    return tenter(p, dispo[i].k).then(function(t){
       if(!t) throw new Error('Réponse vide.');
       return { texte:t, moteur:p.nom };
     }).catch(function(e){
+      if(e && e.coupe) throw e;          /* couper ne doit pas déclencher la bascule */
       dernier = e; i++;
       if(i < dispo.length) service('Bascule sur ' + PROVIDERS[dispo[i].id].nom + '.');
       return essai();
     });
   }
   return essai();
+}
+
+function demander(messages, temperature, maxJetons){
+  return chaine(function(p, k){
+    return xhrJson(p.url, {
+      model: p.modele, messages: messages,
+      temperature: (temperature == null ? 0.7 : temperature),
+      max_tokens: maxJetons || 2400
+    }, { Authorization: 'Bearer ' + k }).then(function(r){
+      return r && r.choices && r.choices[0] && r.choices[0].message ? r.choices[0].message.content : '';
+    });
+  });
 }
 
 /* ── Flux SSE en XHR : le texte s'écrit pendant qu'il arrive ── */
@@ -647,6 +691,7 @@ function xhrFlux(url, corps, entetes, onMorceau, delai){
 
     x.onprogress = function(){ if(x.status >= 200 && x.status < 300) avaler(); };
     x.onload = function(){
+      if(enCours === x) enCours = null;
       if(x.status >= 200 && x.status < 300){
         avaler();
         if(!texte) ko(new Error('Flux vide.')); else ok(texte);
@@ -658,8 +703,10 @@ function xhrFlux(url, corps, entetes, onMorceau, delai){
         ko(err);
       }
     };
-    x.onerror   = function(){ ko(new Error('Réseau injoignable.')); };
-    x.ontimeout = function(){ ko(new Error('Délai dépassé.')); };
+    x.onabort   = function(){ if(enCours === x) enCours = null; ko(interrompu()); };
+    x.onerror   = function(){ if(enCours === x) enCours = null; ko(new Error('Réseau injoignable.')); };
+    x.ontimeout = function(){ if(enCours === x) enCours = null; ko(new Error('Délai dépassé.')); };
+    enCours = x;
     x.send(JSON.stringify(corps));
   });
 }
@@ -667,25 +714,13 @@ function xhrFlux(url, corps, entetes, onMorceau, delai){
 function patienter(ms){ return new Promise(function(ok){ setTimeout(ok, ms); }); }
 
 function demanderFlux(messages, temperature, maxJetons, onMorceau){
-  var dispo = cles();
-  if(!dispo.length) return Promise.reject(new Error('Aucune clé enregistrée. Ouvrez les Réglages.'));
-  var i = 0, dernier = null;
-  function essai(){
-    if(i >= dispo.length) return Promise.reject(dernier || new Error('Tous les moteurs ont refusé.'));
-    var p = PROVIDERS[dispo[i].id], k = dispo[i].k;
+  return chaine(function(p, k){
     return xhrFlux(p.url, {
       model: p.modele, messages: messages, stream: true,
       temperature: (temperature == null ? 0.7 : temperature),
       max_tokens: maxJetons || 2400
-    }, { Authorization: 'Bearer ' + k }, onMorceau || null, 180000)
-    .then(function(t){ return { texte:t, moteur:p.nom }; })
-    .catch(function(e){
-      dernier = e; i++;
-      if(i < dispo.length) service('Bascule sur ' + PROVIDERS[dispo[i].id].nom + '.');
-      return essai();
-    });
-  }
-  return essai();
+    }, { Authorization: 'Bearer ' + k }, onMorceau || null, 180000);
+  });
 }
 
 function contexte(){
@@ -810,7 +845,12 @@ function extrairePdf(f){
   if(!window.pdfjsLib) return Promise.reject(new Error('Lecteur PDF pas encore chargé. Réessayez dans deux secondes.'));
   try { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js'; } catch(e){}
   return lireBinaire(f).then(function(buf){
-    return window.pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+    return Promise.race([
+      window.pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise,
+      new Promise(function(_, ko){
+        setTimeout(function(){ ko(new Error('Le lecteur PDF ne répond pas — vérifiez la connexion, son moteur vient d\'un CDN.')); }, 45000);
+      })
+    ]);
   }).then(function(pdf){
     var pages = Math.min(pdf.numPages, MAX_PAGES), suite = Promise.resolve('');
     /* Les items PDF arrivent à plat : on reconstruit les retours à la ligne
@@ -1186,7 +1226,10 @@ function rendreStoryboard(vues){
   var z = $('storyboard'), h = '';
   for(var i=0;i<vues.length;i++){
     h += '<figure class="vue-plan" style="margin:0">' +
-         '<img src="' + esc(vues[i].url) + '" alt="Plan ' + (i+1) + '" loading="lazy">' +
+         '<img class="chargement" src="' + esc(vues[i].url) + '" alt="Plan ' + (i+1) + '" loading="lazy" ' +
+         'onload="this.classList.remove(\'chargement\')" ' +
+         'onerror="this.classList.remove(\'chargement\');this.classList.add(\'manquee\');' +
+         'this.alt=\'Vue non rendue\'">' +
          '<figcaption class="pied"><b>Plan ' + (i+1) + '</b>' +
          '<span>' + esc(vues[i].legende) + '</span></figcaption></figure>';
   }
@@ -1224,8 +1267,19 @@ function moteur(actif, titre, detail){
   $('tirage').className = 'tirage' + (actif ? ' on' : '');
   if(titre)  $('tirage-titre').textContent = titre;
   $('tirage-detail').textContent = detail || '';
+  if(!actif) $('ecriture').className = '';
   var b = document.querySelectorAll('.btn, .mini');
   for(var i=0;i<b.length;i++) b[i].disabled = !!actif;
+  $('b-couper').disabled = false;   /* couper reste toujours possible */
+}
+
+/* Le clap s'efface pour laisser voir le texte arriver, mais le
+   verrou tient : sans ça un second envoi écrasait le premier. */
+function ecrit(quoi){
+  $('tirage').className = 'tirage';
+  $('ecriture').className = 'on';
+  if(quoi) $('ecriture-quoi').textContent = quoi;
+  $('b-couper').disabled = false;
 }
 
 /* ── Persistance ────────────────────────────────────────── */
@@ -1246,6 +1300,13 @@ function charger(){
 }
 
 /* ── Rendus ─────────────────────────────────────────────── */
+function majDernierTour(t){
+  var d = $('fil').lastElementChild;
+  var e = d && d.querySelector('.dit');
+  if(e){ e.textContent = t; return; }
+  rendreFil();
+}
+
 function rendreFil(){
   var h = '';
   for(var i=0;i<etat.fil.length;i++){
@@ -1410,14 +1471,20 @@ function envoyer(){
   moteur(true, 'Le réalisateur réfléchit', 'Plan de travail en cours');
   etat.fil.push({ qui:'real', texte:'' });
   var rang = etat.fil.length - 1;
+  rendreFil();
   demanderFlux(msgs, 0.75, 1600, function(t){
     etat.fil[rang].texte = t;
-    if(occupe){ moteur(false); }        /* on lève le clap dès le premier mot */
-    rendreFil();
+    ecrit('Vision-IA répond…');
+    majDernierTour(t);                  /* on ne reconstruit pas tout le fil à chaque mot */
   }).then(function(r){
     etat.fil[rang].texte = r.texte;
     rendreFil(); sauver(); moteur(false);
   }).catch(function(e){
+    if(e && e.coupe && etat.fil[rang] && etat.fil[rang].texte){
+      etat.fil[rang].texte += ' […coupé]';
+      rendreFil(); sauver(); moteur(false); service('Réponse coupée, le début est gardé.');
+      return;
+    }
     etat.fil.splice(rang, 1); rendreFil();
     moteur(false); service(e.message, true);
   });
@@ -1433,14 +1500,21 @@ function ecrireNote(){
   moteur(true, 'Écriture de la note', 'Parti pris en cours de formulation');
   onglet('note');
   demanderFlux(m, 0.8, 1800, function(t){
-    if(occupe) moteur(false);
+    ecrit('Note d\'intention en cours…');
     $('sortie-note').textContent = t;
   }).then(function(r){
     etat.note = r.texte.trim();
     $('sortie-note').textContent = etat.note;
     marquerPhases(); rendreDossier(); sauver(); moteur(false);
     service('Note écrite par ' + r.moteur + '.');
-  }).catch(function(e){ moteur(false); service(e.message, true); });
+  }).catch(function(e){
+    moteur(false);
+    if(e && e.coupe){
+      etat.note = $('sortie-note').textContent.trim();
+      marquerPhases(); rendreDossier(); sauver();
+      service('Note coupée, le texte écrit est gardé.');
+    } else service(e.message, true);
+  });
 }
 
 function decouper(ajout){
@@ -1523,14 +1597,21 @@ function directives(){
     'Termine par trois risques de tournage et la parade pour chacun. Pas de question à la fin.' });
   moteur(true, 'Rédaction des directives', 'Casting, repérages, équipe, son');
   demanderFlux(m, 0.7, 2200, function(t){
-    if(occupe) moteur(false);
+    ecrit('Directives en cours…');
     $('sortie-prod').textContent = t;
   }).then(function(r){
     etat.prod = r.texte.trim();
     $('sortie-prod').textContent = etat.prod;
     marquerPhases(); rendreDossier(); sauver(); moteur(false);
     service('Directives établies par ' + r.moteur + '.');
-  }).catch(function(e){ moteur(false); service(e.message, true); });
+  }).catch(function(e){
+    moteur(false);
+    if(e && e.coupe){
+      etat.prod = $('sortie-prod').textContent.trim();
+      marquerPhases(); rendreDossier(); sauver();
+      service('Directives coupées, le texte écrit est gardé.');
+    } else service(e.message, true);
+  });
 }
 
 /* ── Câblage ────────────────────────────────────────────── */
@@ -1693,6 +1774,7 @@ function demarrer(){
     $('k-mistral').value  = safeStorage.getItem(PROVIDERS.mistral.cle)  || '';
     $('f-consigne').value = etat.consigne;
     $('voile-reglages').className = 'voile on';
+    $('k-groq').focus();
   });
   $('b-fermer').addEventListener('click', function(){ $('voile-reglages').className = 'voile'; });
   $('voile-reglages').addEventListener('click', function(e){
@@ -1719,8 +1801,30 @@ function demarrer(){
     service('Nouveau film.');
   });
 
+  $('b-couper').addEventListener('click', function(){
+    couper();
+    $('ecriture').className = '';
+    service('Coupé.');
+  });
+
+  /* Flèches gauche/droite entre les phases, comme un vrai jeu d'onglets */
+  document.querySelector('.phases').addEventListener('keydown', function(e){
+    if(e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    var t = Array.prototype.slice.call(document.querySelectorAll('.phase'));
+    var i = t.indexOf(document.activeElement);
+    if(i < 0) return;
+    e.preventDefault();
+    var j = (i + (e.key === 'ArrowRight' ? 1 : -1) + t.length) % t.length;
+    t[j].focus(); onglet(t[j].getAttribute('data-vue'));
+  });
+
   document.addEventListener('keydown', function(e){
-    if(e.key === 'Escape') $('voile-reglages').className = 'voile';
+    if(e.key === 'Escape'){
+      if($('voile-reglages').className.indexOf('on') > -1){
+        $('voile-reglages').className = 'voile';
+        $('b-reglages').focus();
+      } else if(occupe){ couper(); }
+    }
   });
 
   if(!cles().length) service('Ajoutez une clé dans les Réglages pour réveiller le réalisateur.');
