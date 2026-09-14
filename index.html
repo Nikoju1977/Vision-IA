@@ -450,6 +450,11 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
     <h3 id="t-reglages">Réglages</h3>
     <p class="chapeau">Une clé suffit. Avec plusieurs, Vision-IA bascule automatiquement sur la suivante en cas de panne.</p>
     <div class="cle">
+      <label for="k-phrase">Phrase de passe du coffre</label>
+      <small id="k-phrase-etat">Chiffre les clés au repos : AES-256-GCM, clé dérivée par PBKDF2 (310 000 tours). Laissée vide, aucune clé n'est écrite sur le disque et tout disparaît au rechargement.</small>
+      <input id="k-phrase" type="password" autocomplete="new-password" spellcheck="false" placeholder="8 signes minimum">
+    </div>
+    <div class="cle">
       <label for="k-groq">Groq</label>
       <small>Llama 3.3 70B — rapide, généreux en quota.</small>
       <input id="k-groq" type="password" placeholder="gsk_…" autocomplete="off" spellcheck="false">
@@ -471,7 +476,24 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
     </div>
     <div class="barre" style="margin:0">
       <button class="btn" id="b-enregistrer">Enregistrer</button>
+      <button class="btn creux" id="b-verrouiller">Verrouiller</button>
       <button class="btn creux" id="b-fermer">Fermer</button>
+    </div>
+  </div>
+</div>
+
+<div class="voile" id="voile-coffre" role="dialog" aria-modal="true" aria-labelledby="t-coffre">
+  <div class="fiche">
+    <h3 id="t-coffre">Coffre verrouillé</h3>
+    <p class="chapeau">Vos clés d'API sont chiffrées sur cet appareil. La phrase de passe les libère pour la session ; elle n'est jamais enregistrée.</p>
+    <div class="cle">
+      <label for="c-phrase">Phrase de passe</label>
+      <input id="c-phrase" type="password" autocomplete="current-password" spellcheck="false">
+    </div>
+    <div class="barre" style="margin:0">
+      <button class="btn" id="b-ouvrir">Déverrouiller</button>
+      <button class="btn creux" id="b-oublier">Oublier le coffre</button>
+      <button class="btn creux" id="b-plus-tard">Plus tard</button>
     </div>
   </div>
 </div>
@@ -565,6 +587,107 @@ function sanitizeKey(k){
   if(!k) return '';
   return String(k).trim().replace(/[\u200B-\u200D\uFEFF\u00AD]/g,'').replace(/[^\x20-\x7E]/g,'');
 }
+/* ── Coffre à clés : AES-256-GCM, clé dérivée par PBKDF2 ──────
+   Les clés d'API ne touchent jamais le stockage en clair. La phrase
+   de passe n'est pas conservée : seule la CryptoKey dérivée vit en
+   mémoire, le temps de la session. Sans phrase, les clés restent en
+   RAM et meurent au rechargement — c'est volontaire. */
+var COFFRE_CLES = 'vai_coffre_v1';
+var COFFRE_TOURS = 310000;
+
+function b64(buf){
+  var b = new Uint8Array(buf), s = '';
+  for(var i=0;i<b.length;i++) s += String.fromCharCode(b[i]);
+  return btoa(s);
+}
+function deb64(s){
+  var b = atob(s), a = new Uint8Array(b.length);
+  for(var i=0;i<b.length;i++) a[i] = b.charCodeAt(i);
+  return a;
+}
+
+var trousseau = (function(){
+  var memoire = {};      /* id → clé en clair, RAM seulement */
+  var aes = null;        /* CryptoKey dérivée, RAM seulement */
+  var sel = null;        /* sel du coffre ouvert, pour le resceller */
+  var subtle = (window.crypto && window.crypto.subtle) ? window.crypto.subtle : null;
+
+  function paquet(){
+    try { return JSON.parse(safeStorage.getItem(COFFRE_CLES) || 'null'); }
+    catch(e){ return null; }
+  }
+  function deriver(phrase, s){
+    return subtle.importKey('raw', new TextEncoder().encode(phrase), 'PBKDF2', false, ['deriveKey'])
+      .then(function(base){
+        return subtle.deriveKey(
+          { name:'PBKDF2', salt:s, iterations:COFFRE_TOURS, hash:'SHA-256' },
+          base, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+      });
+  }
+  function ecrire(){
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var clair = new TextEncoder().encode(JSON.stringify(memoire));
+    return subtle.encrypt({ name:'AES-GCM', iv:iv }, aes, clair).then(function(chiffre){
+      safeStorage.setItem(COFFRE_CLES, JSON.stringify({
+        v:1, tours:COFFRE_TOURS, sel:b64(sel), iv:b64(iv), data:b64(chiffre)
+      }));
+      /* purge de toute trace en clair héritée des versions précédentes */
+      ORDRE.forEach(function(id){ safeStorage.removeItem(PROVIDERS[id].cle); });
+      return true;
+    });
+  }
+
+  return {
+    possible: function(){ return !!subtle; },
+    existe:   function(){ return !!paquet(); },
+    ouvert:   function(){ return !!aes; },
+    lire:     function(id){ return memoire[id] || ''; },
+    poser:    function(id, v){ if(v) memoire[id] = v; else delete memoire[id]; },
+
+    ouvrir: function(phrase){
+      var p = paquet();
+      if(!p) return Promise.reject(new Error('Aucun coffre enregistré.'));
+      if(!subtle) return Promise.reject(new Error('Chiffrement indisponible sur ce navigateur.'));
+      var s = deb64(p.sel), iv = deb64(p.iv);
+      return deriver(phrase, s).then(function(k){
+        return subtle.decrypt({ name:'AES-GCM', iv:iv }, k, deb64(p.data)).then(function(clair){
+          memoire = JSON.parse(new TextDecoder().decode(clair));
+          aes = k; sel = s;
+          return true;
+        });
+      }).catch(function(){ throw new Error('Phrase de passe refusée.'); });
+    },
+
+    sceller: function(phrase){
+      if(!subtle) return Promise.reject(new Error('Chiffrement indisponible sur ce navigateur.'));
+      if(!phrase || phrase.length < 8) return Promise.reject(new Error('Phrase de passe trop courte (8 signes minimum).'));
+      sel = crypto.getRandomValues(new Uint8Array(16));
+      return deriver(phrase, sel).then(function(k){ aes = k; return ecrire(); });
+    },
+
+    /* Rechiffre avec la clé déjà dérivée : sert quand on modifie une clé
+       alors que le coffre est ouvert, sans redemander la phrase. */
+    resceller: function(){
+      if(!aes || !sel) return Promise.reject(new Error('Coffre fermé.'));
+      return ecrire();
+    },
+
+    verrouiller: function(){ aes = null; sel = null; memoire = {}; },
+    detruire: function(){ safeStorage.removeItem(COFFRE_CLES); aes = null; sel = null; memoire = {}; }
+  };
+})();
+
+/* Clés laissées en clair par une version antérieure : on les reprend en
+   mémoire pour ne rien casser, et on invite à sceller le coffre. */
+function recupererClairs(){
+  var trouve = false;
+  ORDRE.forEach(function(id){
+    var v = sanitizeKey(safeStorage.getItem(PROVIDERS[id].cle) || '');
+    if(v){ trousseau.poser(id, v); trouve = true; }
+  });
+  return trouve;
+}
+
 function service(msg, rouge){
   var t = $('service');
   t.textContent = msg;
@@ -576,7 +699,7 @@ function cles(){
   var dispo = [];
   for(var i=0;i<ORDRE.length;i++){
     var id = ORDRE[i];
-    var k = sanitizeKey(safeStorage.getItem(PROVIDERS[id].cle) || '');
+    var k = sanitizeKey(trousseau.lire(id));
     if(k) dispo.push({ id:id, k:k });
   }
   return dispo;
@@ -1833,9 +1956,9 @@ function demarrer(){
   $('b-imprimer').addEventListener('click', function(){ window.print(); });
 
   $('b-reglages').addEventListener('click', function(){
-    $('k-groq').value     = safeStorage.getItem(PROVIDERS.groq.cle)     || '';
-    $('k-cerebras').value = safeStorage.getItem(PROVIDERS.cerebras.cle) || '';
-    $('k-mistral').value  = safeStorage.getItem(PROVIDERS.mistral.cle)  || '';
+    ORDRE.forEach(function(id){ $('k-' + id).value = trousseau.lire(id); });
+    $('k-phrase').value = '';
+    majEtatCoffre();
     $('f-consigne').value = etat.consigne;
     $('voile-reglages').className = 'voile on';
     $('k-groq').focus();
@@ -1844,15 +1967,83 @@ function demarrer(){
   $('voile-reglages').addEventListener('click', function(e){
     if(e.target === this) this.className = 'voile';
   });
+  $('voile-coffre').addEventListener('click', function(e){
+    if(e.target === this){ this.className = 'voile'; $('c-phrase').value = ''; }
+  });
+  function majEtatCoffre(){
+    var t = $('k-phrase-etat');
+    if(!trousseau.possible()){
+      t.textContent = "Chiffrement indisponible sur ce navigateur : les clés resteront en mémoire, le temps de la session.";
+    } else if(trousseau.ouvert()){
+      t.textContent = "Coffre ouvert. Laissez ce champ vide pour conserver la phrase actuelle, ou saisissez-en une nouvelle pour rechiffrer.";
+    } else if(trousseau.existe()){
+      t.textContent = "Un coffre existe mais il est verrouillé. Saisissez la phrase pour le remplacer — les clés qu'il contient seront perdues.";
+    } else {
+      t.textContent = "Chiffre les clés au repos : AES-256-GCM, clé dérivée par PBKDF2 (310 000 tours). Laissée vide, aucune clé n'est écrite sur le disque et tout disparaît au rechargement.";
+    }
+  }
+
   $('b-enregistrer').addEventListener('click', function(){
-    ORDRE.forEach(function(id){
-      var v = sanitizeKey($('k-' + id).value);
-      if(v) safeStorage.setItem(PROVIDERS[id].cle, v); else safeStorage.removeItem(PROVIDERS[id].cle);
-    });
+    ORDRE.forEach(function(id){ trousseau.poser(id, sanitizeKey($('k-' + id).value)); });
     etat.consigne = $('f-consigne').value.trim() || CONSIGNE_PAR_DEFAUT;
     sauver(); majVoyant();
-    $('voile-reglages').className = 'voile';
-    service(cles().length ? 'Réglages enregistrés.' : 'Aucune clé : le réalisateur restera muet.', !cles().length);
+
+    var phrase = $('k-phrase').value;
+    var suite;
+    if(phrase) suite = trousseau.sceller(phrase).then(function(){ return 'Clés chiffrées dans le coffre.'; });
+    else if(trousseau.ouvert()) suite = trousseau.resceller().then(function(){ return 'Coffre mis à jour.'; });
+    else suite = Promise.resolve(cles().length
+      ? 'Clés gardées en mémoire seulement : elles disparaîtront au rechargement.'
+      : 'Aucune clé : le réalisateur restera muet.');
+
+    suite.then(function(msg){
+      $('k-phrase').value = '';
+      $('voile-reglages').className = 'voile';
+      service(msg, !cles().length);
+    }).catch(function(e){
+      service(e.message || 'Le coffre a refusé la manœuvre.', true);
+    });
+  });
+
+  $('b-verrouiller').addEventListener('click', function(){
+    if(!trousseau.existe()){ service('Aucun coffre à verrouiller : définissez d\'abord une phrase de passe.', true); return; }
+    trousseau.verrouiller();
+    ORDRE.forEach(function(id){ $('k-' + id).value = ''; });
+    majVoyant(); majEtatCoffre();
+    service('Coffre verrouillé.');
+  });
+
+  $('b-ouvrir').addEventListener('click', function(){
+    var phrase = $('c-phrase').value;
+    if(!phrase){ service('Entrez la phrase de passe.', true); return; }
+    $('b-ouvrir').disabled = true;
+    trousseau.ouvrir(phrase).then(function(){
+      $('c-phrase').value = '';
+      $('voile-coffre').className = 'voile';
+      majVoyant();
+      service('Coffre ouvert.');
+    }).catch(function(e){
+      service(e.message || 'Phrase de passe refusée.', true);
+    }).then(function(){ $('b-ouvrir').disabled = false; });
+  });
+
+  $('b-plus-tard').addEventListener('click', function(){
+    $('c-phrase').value = '';
+    $('voile-coffre').className = 'voile';
+    service('Coffre laissé fermé : ajoutez une clé de session dans les Réglages.', true);
+  });
+
+  $('b-oublier').addEventListener('click', function(){
+    if(!window.confirm('Détruire le coffre ? Les clés chiffrées seront définitivement perdues.')) return;
+    trousseau.detruire();
+    $('c-phrase').value = '';
+    $('voile-coffre').className = 'voile';
+    majVoyant();
+    service('Coffre détruit.');
+  });
+
+  $('c-phrase').addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){ e.preventDefault(); $('b-ouvrir').click(); }
   });
 
   $('b-vider').addEventListener('click', function(){
@@ -1884,14 +2075,29 @@ function demarrer(){
 
   document.addEventListener('keydown', function(e){
     if(e.key === 'Escape'){
-      if($('voile-reglages').className.indexOf('on') > -1){
+      if($('voile-coffre').className.indexOf('on') > -1){
+        $('voile-coffre').className = 'voile';
+        $('c-phrase').value = '';
+      } else if($('voile-reglages').className.indexOf('on') > -1){
         $('voile-reglages').className = 'voile';
+        $('k-phrase').value = '';
         $('b-reglages').focus();
       } else if(occupe){ couper(); }
     }
   });
 
-  if(!cles().length) service('Ajoutez une clé dans les Réglages pour réveiller le réalisateur.');
+  if(trousseau.existe()){
+    $('voile-coffre').className = 'voile on';
+    setTimeout(function(){ $('c-phrase').focus(); }, 60);
+  } else {
+    /* Reprise des clés laissées en clair par une version antérieure. */
+    if(recupererClairs()){
+      majVoyant();
+      service('Clés reprises en clair. Donnez une phrase de passe dans les Réglages pour les chiffrer.', true);
+    } else {
+      service('Ajoutez une clé dans les Réglages pour réveiller le réalisateur.');
+    }
+  }
 
   if('serviceWorker' in navigator){
     window.addEventListener('load', function(){
