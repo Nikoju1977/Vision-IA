@@ -85,3 +85,15 @@ Depuis le découpage, chaque plan devient une vue générée par Pollinations (g
 - **Storyboard** : état de chargement visible et repli propre quand une vue ne revient pas.
 - **pdf.js** : garde-fou de 45 s si le worker du CDN est injoignable, au lieu d'une attente infinie.
 - **Clavier** : flèches gauche/droite entre les phases, Échap ferme les réglages puis coupe une génération, focus rendu au bouton d'origine.
+
+## Quotas et 429 (v1.2)
+
+L'offre gratuite de Mistral plafonne à une requête par seconde, Groq à trente par minute. Trois mécanismes, du plus discret au plus visible :
+
+1. **Cadence anticipée** — chaque fournisseur a son intervalle minimal (Mistral 1,4 s, Cerebras 1,2 s, Groq 2,1 s) et les appels sont espacés avant d'être émis. Le 429 est évité plutôt que rattrapé. C'est ce qui rend le dépouillement d'un roman praticable : plus de temporisation artificielle dans la boucle, la cadence est tenue au niveau du transport.
+2. **Reprise sur le même moteur** — un 429 n'est pas une panne mais une file d'attente. L'en-tête `Retry-After` est lu et respecté ; à défaut, attente de 3, 9 puis 20 s. Un 5xx suit la même règle.
+3. **Bascule intelligente** — s'il reste une clé libre derrière, une seule reprise courte (2 s) puis on passe au moteur suivant : inutile d'attendre 30 s quand Groq est disponible. C'est seulement sur le dernier moteur de la chaîne qu'on patiente pour de bon.
+
+Les messages sont explicites : « Mistral sature, reprise dans 9 s. » puis « Bascule sur Groq. » Les erreurs 401 et 403 sont nommées « Clé refusée » et ne déclenchent aucune attente — une clé invalide ne se répare pas en patientant.
+
+L'analyse de repérage, qui attaque Pixtral hors chaîne et sans repli possible, suit la même politique de reprise.
