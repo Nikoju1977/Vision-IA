@@ -533,7 +533,7 @@ var ACCUEIL =
 var PROVIDERS = {
   groq:     { nom:'Groq',     url:'https://api.groq.com/openai/v1/chat/completions', cle:'vai_k_groq',     modele:'llama-3.3-70b-versatile', cadence:2100 },
   cerebras: { nom:'Cerebras', url:'https://api.cerebras.ai/v1/chat/completions',     cle:'vai_k_cerebras', modele:'llama-3.3-70b',           cadence:1200 },
-  mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest',    cadence:1400 }
+  mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest',    cadence:1800 }
 };
 /* Mistral gratuit plafonne à une requête par seconde : on espace nous-mêmes
    les appels plutôt que d'encaisser un 429 puis de courir après. */
@@ -662,6 +662,12 @@ function avecReprise(p, tenter){
     return tourDeRole(p).then(tenter).catch(function(e){
       if(e && e.coupe) throw e;
       if((e.code === 429 || e.code >= 500) && n < ATTENTES.length){
+        /* Si le garde Mistral a déjà armé son refroidissement, il porte seul
+           l'attente : retemporiser ici la compterait deux fois. */
+        if(e.gardeMistral){
+          service(p.nom + ' sature, reprise dans ' + Math.round(e.gardeMistral) + ' s.');
+          return essai(n + 1);
+        }
         var s = e.attendre || ATTENTES[n];
         service(p.nom + ' sature, reprise dans ' + Math.round(s) + ' s.');
         dernierAppel[p.url] = Date.now() + s * 1000;
@@ -695,6 +701,10 @@ function chaine(tenter){
       dernier = e;
       var saturable = e && (e.code === 429 || e.code >= 500);
       if(saturable && reprises < ATTENTES.length){
+        if(e.gardeMistral){
+          service(p.nom + ' sature, reprise dans ' + Math.round(e.gardeMistral) + ' s.');
+          return essai(reprises + 1);
+        }
         var s = e.attendre || ATTENTES[reprises];
         service(p.nom + ' sature, reprise dans ' + Math.round(s) + ' s.');
         dernierAppel[p.url] = Date.now() + s * 1000;
