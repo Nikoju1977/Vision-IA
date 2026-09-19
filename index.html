@@ -456,7 +456,7 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
     </div>
     <div class="cle">
       <label for="k-plafond">Plafond de jetons par minute</label>
-      <small>Mistral limite les requêtes/seconde <em>et</em> les jetons/minute, sans publier les seuils du palier gratuit : relevez le vôtre dans Mistral AI Studio → Limits. 0 laisse le plafond désarmé.</small>
+      <small>Relevez votre plafond dans Mistral AI Studio → Limits. Entrée et sortie sont estimées avant chaque appel. 0 désactive ce contrôle préventif ; les pauses après 429 restent actives.</small>
       <input id="k-plafond" type="number" min="0" step="1000" inputmode="numeric" placeholder="0">
     </div>
     <div class="cle">
@@ -562,18 +562,17 @@ var PROVIDERS = {
   cerebras: { nom:'Cerebras', url:'https://api.cerebras.ai/v1/chat/completions',     cle:'vai_k_cerebras', modele:'llama-3.3-70b',           cadence:1200 },
   mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest',    cadence:1800 }
 };
-/* Mistral gratuit plafonne à une requête par seconde : on espace nous-mêmes
-   les appels plutôt que d'encaisser un 429 puis de courir après. */
+/* Cadence minimale locale ; les quotas réels dépendent du compte. */
 var CADENCE_ETAT = 'vai_cadence_v1';
 var PLAFOND_CLE = 'vai_plafond_jetons';
 var FENETRE_JETONS = 60000;
-var ORDRE = ['groq','cerebras','mistral'];
+var ORDRE = ['mistral','groq','cerebras'];
 var VISION = { url:'https://api.mistral.ai/v1/chat/completions', cle:'vai_k_mistral', modele:'pixtral-12b-2409' };
 var STOCK = 'vai_projet_v1';
 var MAX_CORPS = 900000;  /* signes conservés par pièce — un roman entier */
 var MAX_CTX = 5000;      /* signes injectés par pièce non dépouillée */
 var MAX_PAGES = 400;     /* pages de PDF lues */
-var MAX_TRANCHES = 90;   /* tranches de dépouillement, garde-fou de quota */
+/* Toutes les tranches du texte conservé sont traitées, sans coupure à 90. */
 
 var etat = {
   titre:'', genre:'', format:'Court métrage', decor:'Décor naturel', budget:'',
@@ -721,8 +720,10 @@ function majVoyant(){
 
 /* ── Appel modèle : XHR, chaîne de secours, interruption ── */
 var enCours = null;   /* la requête vivante, pour pouvoir la couper */
+var generationCoupe = 0;
 
 function couper(){
+  generationCoupe++;
   if(!enCours) return;
   var x = enCours; enCours = null;
   try { x.abort(); } catch(e){}
@@ -763,9 +764,10 @@ function patienter(ms){ return new Promise(function(ok){ setTimeout(ok, ms); });
 
 function secondesAvantReprise(x){
   var v = '';
-  try { v = x.getResponseHeader('retry-after') || x.getResponseHeader('x-ratelimit-reset-requests') || ''; } catch(e){}
-  var s = parseFloat(String(v).replace(/[^\d.]/g,''));
-  if(!isNaN(s) && s > 0) return Math.min(s, 90);
+  try { v = x.getResponseHeader('retry-after') || ''; } catch(e){}
+  if(/^\d+(\.\d+)?$/.test(v)) return Number(v);
+  var date = Date.parse(v);
+  if(v && !isNaN(date)) return Math.max(0, (date - Date.now()) / 1000);
   return 0;
 }
 
@@ -823,36 +825,56 @@ function avecVerrou(nom, travail){
 
 /* Respecte la cadence du fournisseur avant de frapper à sa porte.
    Le verrou est tenu pendant l'attente : c'est ce qui fait la file. */
-function tourDeRole(p){
+function tourDeRole(p, estimation, generation){
+  if(generation == null) generation = generationCoupe;
   return avecVerrou('vai-cadence-' + p.url, function(){
+    if(generation !== generationCoupe) throw interrompu();
+    function verifier(){
     var o = cadenceLire(), pi = piste(o, p.url);
     var maintenant = Date.now();
-    var cible = Math.max(pi.bloque || 0, (pi.depart || 0) + (p.cadence || 0));
+    if(generation !== generationCoupe) throw interrompu();
+    var cible = Math.max(pi.bloque || 0, (pi.depart || 0) + Math.max(p.cadence || 0, pi.cadence || 0));
 
     var plafond = plafondJetons();
     if(plafond > 0){
       var consommes = jetonsRecents(pi, maintenant);
-      if(consommes >= plafond && pi.jetons.length){
-        /* On attend que la plus vieille consommation sorte de la fenêtre. */
-        cible = Math.max(cible, pi.jetons[0][0] + FENETRE_JETONS);
+      if(estimation > plafond) throw new Error('Requête estimée à ' + estimation + ' jetons, au-delà du plafond/minute réglé (' + plafond + '). Vérifiez ce plafond dans Réglages ; les fiches sont conservées.');
+      for(var j=0; consommes + (estimation || 0) > plafond && j < pi.jetons.length; j++){
+        cible = Math.max(cible, pi.jetons[j][0] + FENETRE_JETONS);
+        consommes -= pi.jetons[j][1];
       }
     }
 
     var ms = Math.max(0, cible - maintenant);
-    pi.depart = maintenant + ms;
+    if(ms > 0){
+      if(occupe){
+        $('ecriture').className = 'on';
+        $('ecriture-quoi').textContent = p.nom + ' — attente quota/cadence : ' + Math.ceil(ms/1000) + ' s';
+      }
+      return patienter(Math.min(ms, 1000)).then(verifier);
+    }
+    pi.depart = maintenant;
+    /* Réserve AVANT le départ : les autres onglets voient aussi cet appel. */
+    if(estimation > 0){
+      pi.jetons = pi.jetons || [];
+      pi.jetons.push([maintenant, estimation]);
+    }
     cadenceEcrire(o);
-    return patienter(ms);
+    return Promise.resolve();
+    }
+    return verifier();
   });
 }
 
-/* Un 429 ou un 5xx arme le refroidissement, partagé lui aussi.
-   Retry-After reste prioritaire ; sinon backoff exponentiel avec jitter. */
+/* Refroidissement partagé. Le délai explicite du serveur reste prioritaire,
+   même au-delà de 90 s ; seul le repli automatique est plafonné. */
 function penaliser(p, secondes){
   var o = cadenceLire(), pi = piste(o, p.url);
   pi.echecs = (pi.echecs || 0) + 1;
   var s = Number(secondes) || 0;
   if(!(s > 0)) s = Math.min(30, Math.pow(2, Math.max(1, pi.echecs))) + Math.random();
-  s = Math.min(90, Math.max(1, s));
+  s = Math.max(1, s);
+  pi.cadence = Math.min(60000, Math.max(p.cadence || 0, pi.cadence || 0) * 2);
   pi.bloque = Math.max(pi.bloque || 0, Date.now() + s * 1000);
   cadenceEcrire(o);
   return s;
@@ -886,23 +908,31 @@ function avecReprise(p, tenter){
    diverge finit toujours par diverger en bug.
    Un 429 n'est pas une panne du moteur mais une file d'attente :
    on patiente et on réessaie le même, on ne le disqualifie pas. */
-function chaine(tenter){
+function chaine(tenter, estimation){
+  var generation = generationCoupe;
   var dispo = cles();
   if(!dispo.length) return Promise.reject(new Error('Aucune clé enregistrée. Ouvrez les Réglages.'));
   var i = 0, dernier = null;
   function essai(reprises){
     if(i >= dispo.length) return Promise.reject(dernier || new Error('Tous les moteurs ont refusé.'));
     var p = PROVIDERS[dispo[i].id], k = dispo[i].k;
-    /* S'il reste un moteur libre derrière, on ne s'acharne pas : une reprise
-       courte, puis on bascule. C'est seulement sur le dernier qu'on patiente. */
-    var ATTENTES = (dispo.length - 1 - i) > 0 ? [2] : [3, 9, 20];
-    return tourDeRole(p).then(function(){ return tenter(p, k); }).then(function(t){
+    /* Un quota/minute exige une vraie fenêtre de repos. Six reprises bornées
+       puis relais éventuel ; un quota persistant ne boucle jamais sans fin. */
+    var ATTENTES = [60, 90, 90, 90, 90, 90];
+    return tourDeRole(p, estimation, generation).then(function(){
+      if(generation !== generationCoupe) throw interrompu();
+      return tenter(p, k);
+    }).then(function(t){
       if(!t) throw new Error('Réponse vide.');
       apaiser(p);
       return { texte:t, moteur:p.nom };
     }).catch(function(e){
       if(e && e.coupe) throw e;                 /* couper ne bascule pas */
       dernier = e;
+      if(e && e.code === 429 && reprises >= ATTENTES.length){
+        penaliser(p, e.attendre || 90);
+        e.message += ' — quota persistant : vérifiez les limites de votre compte avant de reprendre.';
+      }
       var saturable = e && (e.code === 429 || e.code >= 500);
       if(saturable && reprises < ATTENTES.length){
         var s = penaliser(p, e.attendre || ATTENTES[reprises]);
@@ -924,10 +954,14 @@ function demander(messages, temperature, maxJetons){
       temperature: (temperature == null ? 0.7 : temperature),
       max_tokens: maxJetons || 2400
     }, { Authorization: 'Bearer ' + k }).then(function(r){
-      if(r && r.usage) noterJetons(p.url, r.usage.total_tokens);
       return r && r.choices && r.choices[0] && r.choices[0].message ? r.choices[0].message.content : '';
     });
-  });
+  }, estimerJetons(messages, maxJetons || 2400));
+}
+
+/* Estimation prudente, pas un tokenizer : entrée + sortie maximale réservées. */
+function estimerJetons(messages, sortie){
+  return Math.ceil(JSON.stringify(messages).length / 3) + sortie + 128;
 }
 
 /* ── Flux SSE en XHR : le texte s'écrit pendant qu'il arrive ── */
@@ -992,8 +1026,8 @@ function demanderFlux(messages, temperature, maxJetons, onMorceau){
       stream_options: { include_usage: true },
       temperature: (temperature == null ? 0.7 : temperature),
       max_tokens: maxJetons || 2400
-    }, { Authorization: 'Bearer ' + k }, onMorceau || null, 180000, p.url);
-  });
+    }, { Authorization: 'Bearer ' + k }, onMorceau || null, 180000);
+  }, estimerJetons(messages, maxJetons || 2400));
 }
 
 function contexte(){
@@ -1179,7 +1213,7 @@ function decouperEnBlocs(t){
 
 function tranches(t, taille){
   var out = [], i = 0;
-  while(i < t.length && out.length < MAX_TRANCHES){
+  while(i < t.length){
     var fin = Math.min(t.length, i + taille);
     if(fin < t.length){
       var coupe = t.lastIndexOf('\n', fin);
@@ -1242,6 +1276,9 @@ function depouiller(i){
   var p = etat.pieces[i];
   if(!p) return;
   var c = corpsDe(p);
+  if(!corpus[p.id] || (p.signes && c.texte.length !== p.signes)){
+    service('Texte intégral indisponible : attendez son chargement ou réimportez le document. Aucune fiche modifiée.', true); return;
+  }
   var lots = tranches(c.texte, 9000);
   if(!lots.length){ service('Rien à dépouiller.'); return; }
 
@@ -1249,10 +1286,14 @@ function depouiller(i){
   var n = p.fiches.length;               /* reprise là où ça s'était arrêté */
   if(n) service('Reprise du dépouillement à la tranche ' + (n+1) + '.');
   moteur(true, 'Dépouillement', p.nom + ' — tranche ' + (n+1) + ' sur ' + lots.length);
+  $('ecriture').className = 'on';
+  var generation = generationCoupe;
 
   function tranche(){
+    if(generation !== generationCoupe) return Promise.reject(interrompu());
     if(n >= lots.length) return Promise.resolve();
     $('tirage-detail').textContent = p.nom + ' — tranche ' + (n+1) + ' sur ' + lots.length;
+    $('ecriture-quoi').textContent = 'Dépouillement : ' + (n+1) + '/' + lots.length;
     var quoi = p.genre === 'scenario'
       ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
       : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
@@ -1267,7 +1308,9 @@ function depouiller(i){
     });
   }
 
-  tranche().then(function(){
+  return tranche().then(function(){
+    return recoudreFiches(p, generation);
+  }).then(function(fiches){
     $('tirage-titre').textContent = 'Synthèse';
     $('tirage-detail').textContent = p.fiches.length + ' tranches à recoudre';
     return demander([
@@ -1277,7 +1320,7 @@ function depouiller(i){
         'Reconstitue une note de lecture de réalisateur, 400 à 600 mots en texte suivi : ' +
         'l\'histoire et son arc, les personnages et ce que je demanderai au jeu, les lieux et leur lumière, ' +
         'les séquences qui portent le film, et ce qui sera difficile à tourner. Pas de question à la fin.\n\n' +
-        p.fiches.join('\n\n') }
+        fiches.join('\n\n') }
     ], 0.6, 1800);
   }).then(function(r){
     p.synthese = r.texte.trim();
@@ -1288,6 +1331,49 @@ function depouiller(i){
     service((e && e.coupe ? 'Dépouillement coupé' : e.message) +
       ' — les ' + p.fiches.length + ' fiches déjà faites sont gardées, relancez pour reprendre.', !(e && e.coupe));
   });
+}
+
+/* Réduction hiérarchique, avec points de reprise persistants.
+   Une requête de synthèse ne reçoit jamais toutes les fiches d'un roman. */
+function recoudreFiches(p, generation){
+  var LIMITE = 6000;
+  if(!Array.isArray(p.raccords)) p.raccords = [];
+  function niveau(fiches, profondeur){
+    if(generation !== generationCoupe) return Promise.reject(interrompu());
+    if(fiches.join('\n\n').length <= LIMITE) return Promise.resolve(fiches);
+    if(profondeur > 12) return Promise.reject(new Error('Synthèse trop volumineuse ; fiches conservées.'));
+    var groupes = [], courant = '';
+    fiches.forEach(function(f){
+      tranches(String(f), LIMITE).forEach(function(partie){
+        if(courant && courant.length + partie.length + 2 > LIMITE){ groupes.push(courant); courant = ''; }
+        courant += (courant ? '\n\n' : '') + partie;
+      });
+    });
+    if(courant) groupes.push(courant);
+    var sorties = [], suite = Promise.resolve();
+    groupes.forEach(function(entree, i){
+      suite = suite.then(function(){
+        if(generation !== generationCoupe) throw interrompu();
+        var cle = profondeur + ':' + i;
+        var garde = p.raccords.find(function(r){ return r.cle === cle && r.entree === entree; });
+        if(garde){ sorties.push(garde.texte); return; }
+        $('tirage-detail').textContent = 'Synthèse intermédiaire ' + (profondeur+1) + ' — groupe ' + (i+1) + '/' + groupes.length;
+        $('ecriture-quoi').textContent = $('tirage-detail').textContent;
+        return demander([
+          {role:'system', content:'Résume fidèlement des fiches de lecture. Ne crée aucun événement absent des fiches.'},
+          {role:'user', content:'Condense ces fiches en 180 mots maximum. Préserve chronologie, noms, causalité, fin du récit, lieux et contraintes de tournage.\n\n' + entree}
+        ], 0.3, 450).then(function(r){
+          var texte = r.texte.trim();
+          if(texte.length >= entree.length) throw new Error('Synthèse intermédiaire non condensée ; relancez pour reprendre.');
+          p.raccords = p.raccords.filter(function(v){ return v.cle !== cle; });
+          p.raccords.push({cle:cle, entree:entree, texte:texte});
+          sorties.push(texte); sauver();
+        });
+      });
+    });
+    return suite.then(function(){ return niveau(sorties, profondeur+1); });
+  }
+  return niveau(p.fiches, 0);
 }
 
 /* ── Repérages : lecture d'image par le modèle de vision ── */
