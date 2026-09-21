@@ -1071,7 +1071,7 @@ function demander(messages, temperature, maxJetons){
 /* Chemin dédié au palier Mistral gratuit.
    Un 429 remonte dès la première tentative afin que le dépouillement puisse
    réduire la tranche au lieu de renvoyer six fois la même charge. */
-function demanderMistralGratuit(messages, temperature, maxJetons){
+function demanderMistralGratuit(messages, temperature, maxJetons, preferGroq){
   var generation = generationCoupe;
   var estimation = estimerJetons(messages, maxJetons || 500);
   var candidats = [];
@@ -1107,6 +1107,14 @@ function demanderMistralGratuit(messages, temperature, maxJetons){
     };
     var insertion = km ? 1 : 0;
     candidats.splice(insertion, 0, groqCandidat);
+  }
+
+  if(preferGroq){
+    /* Pour les très longs documents, Groq est le premier choix afin de réduire
+       le nombre de requêtes ; Mistral reste néanmoins disponible en repli. */
+    candidats.sort(function(a,b){
+      return (a.id === 'groq' ? -1 : 0) - (b.id === 'groq' ? -1 : 0);
+    });
   }
 
   /* Un fournisseur refroidi après un 429 va en fin de liste. Cela évite
@@ -1871,9 +1879,11 @@ function demanderDepouillementSansMistral(messages, temperature, maxJetons){
   return essai();
 }
 
-function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sansMistral){
+function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, route){
   var pos = 0;
   var n = baseFiches;
+  var sansMistral = route === true || route === 'sans-mistral';
+  var groqPremier = route === 'groq-premier';
   var gratuitHybride = !sansMistral && modeDepouillementGratuit();
   var MIN_TRANCHE_FREE = 900;
 
@@ -1898,7 +1908,7 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
     var appel = sansMistral
       ? demanderDepouillementSansMistral(messages, 0.4, 500)
       : (gratuitHybride
-          ? demanderMistralGratuit(messages, 0.4, 500)
+          ? demanderMistralGratuit(messages, 0.4, 500, groqPremier)
           : demander(messages, 0.4, 500));
 
     return appel.then(function(r){
@@ -1997,11 +2007,12 @@ function depouiller(i){
   if(p.batchMistral && p.batchMistral.id){
     service('Reprise du Batch Mistral déjà lancé.');
     travail = attendreBatchDepouillement(p, generation);
-  } else if(strategie === 'groq' || strategie === 'secours'){
-    service(strategie === 'groq'
-      ? 'Document long — Groq prend directement le dépouillement pour réduire le nombre de requêtes.'
-      : 'Dépouillement sur moteur de secours Groq/Cerebras.');
-    travail = depouillerTempsReel(p, lots, n, total, p.genre, generation, true);
+  } else if(strategie === 'groq'){
+    service('Document long — Groq en priorité, avec repli Mistral automatique si nécessaire.');
+    travail = depouillerTempsReel(p, lots, n, total, p.genre, generation, 'groq-premier');
+  } else if(strategie === 'secours'){
+    service('Dépouillement sur moteur de secours Groq/Cerebras.');
+    travail = depouillerTempsReel(p, lots, n, total, p.genre, generation, 'sans-mistral');
   } else if(strategie === 'hybride'){
     service('Mode économique — Mistral puis bascule Groq immédiate si nécessaire.');
     travail = depouillerTempsReel(p, lots, n, total, p.genre, generation);
