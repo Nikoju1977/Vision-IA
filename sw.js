@@ -1,7 +1,7 @@
 /* Vision-IA · service worker — Studio Niko Design
    index.html en réseau d'abord : une mise en ligne ne reste pas
    prisonnière du cache. Le reste en cache d'abord. */
-var VERSION = 'vision-ia-v13';
+var VERSION = 'vision-ia-v14';
 var COQUILLE = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 /* Lecteurs PDF/DOCX servis par CDN : hors cache, le classeur tombait
