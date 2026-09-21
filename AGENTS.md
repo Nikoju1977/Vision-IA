@@ -6,11 +6,11 @@ intervenant sur ce dépôt. Conventions Studio Niko Design.
 ## Le projet
 
 Vision-IA est un agent autonome qui tient le rôle d'un réalisateur de cinéma
-professionnel, du pitch jusqu'à la post-production. Six phases : plateau
-conversationnel, note d'intention, découpage technique, parti pris d'image et
-palette, directives de production, dossier d'export (Markdown / JSON /
+professionnel, du pitch jusqu'à la post-production. Sept phases : plateau
+conversationnel, note d'intention, découpage technique, conducteur, parti pris
+d'image et palette, directives de production, dossier d'export (Markdown / JSON /
 impression). Un classeur accepte PDF, DOCX, TXT, MD et Fountain ; les repérages
-photo sont analysés par Pixtral.
+photo sont analysés par Ministral 3 en vision.
 
 ## Architecture
 
