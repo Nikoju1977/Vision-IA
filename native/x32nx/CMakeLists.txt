@@ -65,25 +65,31 @@ target_link_libraries(run_component_tests PRIVATE x32nx_core GTest::gtest GTest:
 add_test(NAME ComponentsQA COMMAND run_component_tests)
 
 if(VISIONIA_BUILD_VFX_BINDINGS)
+  set(PYBIND11_FINDPYTHON ON)
+  find_package(Python REQUIRED COMPONENTS Interpreter Development)
   find_package(pybind11 CONFIG REQUIRED)
-  find_package(tensorflow-lite CONFIG REQUIRED)
-  find_package(Alembic CONFIG REQUIRED)
 
-  if(TARGET tensorflow-lite::tensorflowlite)
-    set(VISIONIA_TFLITE_TARGET tensorflow-lite::tensorflowlite)
-  elseif(TARGET tensorflow-lite)
-    set(VISIONIA_TFLITE_TARGET tensorflow-lite)
-  else()
-    message(FATAL_ERROR "TensorFlow Lite CMake target not found")
-  endif()
+  # Ubuntu's tensorflow-lite package exposes a CMake config that may reference
+  # development configs not installed as transitive dependencies. Link the
+  # system shared library directly; its runtime dependencies are resolved by
+  # the dynamic loader.
+  find_path(VISIONIA_TFLITE_INCLUDE_DIR
+    NAMES tensorflow/lite/model.h
+    REQUIRED
+  )
+  find_library(VISIONIA_TFLITE_LIBRARY
+    NAMES tensorflow-lite
+    REQUIRED
+  )
 
-  if(TARGET Alembic::Alembic)
-    set(VISIONIA_ALEMBIC_TARGET Alembic::Alembic)
-  elseif(TARGET Alembic)
-    set(VISIONIA_ALEMBIC_TARGET Alembic)
-  else()
-    message(FATAL_ERROR "Alembic CMake target not found")
-  endif()
+  find_path(VISIONIA_ALEMBIC_INCLUDE_DIR
+    NAMES Alembic/AbcGeom/All.h
+    REQUIRED
+  )
+  find_library(VISIONIA_ALEMBIC_LIBRARY
+    NAMES Alembic
+    REQUIRED
+  )
 
   pybind11_add_module(vision_ia
     optional/vision_ia_bindings.cpp
@@ -94,11 +100,13 @@ if(VISIONIA_BUILD_VFX_BINDINGS)
   target_include_directories(vision_ia PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/optional
     ${OpenCV_INCLUDE_DIRS}
+    ${VISIONIA_TFLITE_INCLUDE_DIR}
+    ${VISIONIA_ALEMBIC_INCLUDE_DIR}
   )
 
   target_link_libraries(vision_ia PRIVATE
-    ${VISIONIA_TFLITE_TARGET}
-    ${VISIONIA_ALEMBIC_TARGET}
+    ${VISIONIA_TFLITE_LIBRARY}
+    ${VISIONIA_ALEMBIC_LIBRARY}
     ${OpenCV_LIBS}
   )
 endif()
