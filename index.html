@@ -1348,6 +1348,260 @@ function verserDocument(f){
   }).catch(function(e){ moteur(false); service(e.message, true); });
 }
 
+/* ── Batch Mistral pour documents longs ──────────────────────
+   Les lots < 10 000 requêtes peuvent être envoyés inline à l'API Batch.
+   Ce chemin évite les limites temps réel RPS/TPM pendant le dépouillement. */
+function mistralBatchRequete(methode, chemin, cle, corps){
+  return new Promise(function(ok, ko){
+    var x = new XMLHttpRequest();
+    x.open(methode, 'https://api.mistral.ai' + chemin, true);
+    x.timeout = 120000;
+    x.setRequestHeader('Authorization', 'Bearer ' + cle);
+    if(corps != null) x.setRequestHeader('Content-Type', 'application/json');
+
+    function erreur(){
+      var detail = '';
+      try { detail = (JSON.parse(x.responseText).error || {}).message || ''; } catch(e){}
+      var err = new Error(libelleHttp(x.status, detail));
+      err.code = x.status;
+      err.attendre = secondesAvantReprise(x);
+      err.detail = detail;
+      return err;
+    }
+
+    x.onload = function(){
+      if(x.status >= 200 && x.status < 300){
+        try { ok(JSON.parse(x.responseText)); }
+        catch(e){ ko(new Error('Réponse Batch Mistral illisible.')); }
+      } else {
+        ko(erreur());
+      }
+    };
+    x.onerror = function(){ ko(new Error('Batch Mistral inaccessible depuis ce navigateur.')); };
+    x.ontimeout = function(){ ko(new Error('Batch Mistral : délai réseau dépassé.')); };
+    x.send(corps == null ? null : JSON.stringify(corps));
+  });
+}
+
+function mistralBatchTexte(chemin, cle){
+  return new Promise(function(ok, ko){
+    var x = new XMLHttpRequest();
+    x.open('GET', 'https://api.mistral.ai' + chemin, true);
+    x.timeout = 120000;
+    x.setRequestHeader('Authorization', 'Bearer ' + cle);
+    x.onload = function(){
+      if(x.status >= 200 && x.status < 300) ok(x.responseText || '');
+      else {
+        var err = new Error(libelleHttp(x.status, 'Résultats Batch indisponibles'));
+        err.code = x.status;
+        ko(err);
+      }
+    };
+    x.onerror = function(){ ko(new Error('Résultats Batch Mistral inaccessibles.')); };
+    x.ontimeout = function(){ ko(new Error('Téléchargement Batch Mistral trop long.')); };
+    x.send();
+  });
+}
+
+function contenuSortieBatch(sortie){
+  var body = sortie && sortie.response && sortie.response.body;
+  var choix = body && body.choices && body.choices[0];
+  var message = choix && choix.message;
+  return message && typeof message.content === 'string' ? message.content.trim() : '';
+}
+
+function sortiesBatchDepuisTexte(texte){
+  return String(texte || '').split(/\r?\n/).map(function(l){ return l.trim(); }).filter(Boolean).map(function(l){
+    try { return JSON.parse(l); } catch(e){ return null; }
+  }).filter(Boolean);
+}
+
+function batchMistralDisponible(){
+  return !!sanitizeKey(trousseau.lire('mistral'));
+}
+
+function creerBatchDepouillement(p, lots, baseFiches, baseOffset, total, genre, generation){
+  var cle = sanitizeKey(trousseau.lire('mistral'));
+  if(!cle) return Promise.reject(new Error('Clé Mistral absente.'));
+
+  var quoi = genre === 'scenario'
+    ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
+    : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
+
+  var requests = lots.map(function(portion, i){
+    var numero = baseFiches + i + 1;
+    return {
+      custom_id: String(numero),
+      body: {
+        max_tokens: 500,
+        temperature: 0.4,
+        messages: [
+          { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
+          { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
+        ]
+      }
+    };
+  });
+
+  $('tirage-detail').textContent = 'Mistral Batch — envoi de ' + lots.length + ' tranches';
+  $('ecriture-quoi').textContent = 'Mistral Batch — préparation';
+
+  return mistralBatchRequete('POST', '/v1/batch/jobs', cle, {
+    requests: requests,
+    model: PROVIDERS.mistral.modele,
+    endpoint: '/v1/chat/completions',
+    timeout_hours: 6,
+    metadata: {
+      job_type: 'vision-ia-depouillement',
+      piece_id: String(p.id || '')
+    }
+  }).then(function(job){
+    if(!job || !job.id) throw new Error('Batch Mistral créé sans identifiant.');
+
+    p.batchMistral = {
+      id: job.id,
+      baseFiches: baseFiches,
+      baseOffset: baseOffset,
+      longueurs: lots.map(function(v){ return v.length; }),
+      total: total,
+      quand: Date.now()
+    };
+    sauver();
+
+    return attendreBatchDepouillement(p, generation);
+  });
+}
+
+function appliquerSortiesBatch(p, sorties){
+  var b = p.batchMistral;
+  if(!b) throw new Error('État Batch Mistral absent.');
+
+  var parId = {};
+  (sorties || []).forEach(function(s){
+    if(s && s.custom_id != null) parId[String(s.custom_id)] = s;
+  });
+
+  var attendues = b.longueurs.length;
+  var textes = [];
+
+  for(var i=0;i<attendues;i++){
+    var numero = b.baseFiches + i + 1;
+    var sortie = parId[String(numero)];
+    var texte = contenuSortieBatch(sortie);
+    if(!texte){
+      var errBody = sortie && sortie.error && (sortie.error.message || sortie.error);
+      throw new Error('Batch Mistral incomplet à la tranche ' + numero + (errBody ? ' : ' + errBody : '.'));
+    }
+    textes.push('[' + numero + '/' + b.total + '] ' + texte);
+  }
+
+  /* Idempotent : si une reprise a déjà importé une partie des résultats,
+     on ne duplique pas les fiches. */
+  p.fiches = p.fiches.slice(0, b.baseFiches).concat(textes);
+  var avance = b.longueurs.reduce(function(a,n){ return a + n; }, 0);
+  p.depouillementOffset = Math.min(
+    corpsDe(p).texte.length,
+    b.baseOffset + avance
+  );
+  p.batchMistral = null;
+  sauver();
+}
+
+function attendreBatchDepouillement(p, generation){
+  var b = p.batchMistral;
+  var cle = sanitizeKey(trousseau.lire('mistral'));
+  if(!b || !b.id || !cle) return Promise.reject(new Error('Batch Mistral impossible à reprendre.'));
+
+  function poll(){
+    if(generation !== generationCoupe) throw interrompu();
+
+    $('ecriture').className = 'on';
+    $('ecriture-quoi').textContent = 'Mistral Batch — traitement en cours';
+
+    return mistralBatchRequete(
+      'GET',
+      '/v1/batch/jobs/' + encodeURIComponent(b.id) + '?inline=true',
+      cle,
+      null
+    ).then(function(job){
+      var statut = String(job && job.status || '').toUpperCase();
+      var faits = Number(job && job.completed_requests || 0);
+      var total = Number(job && job.total_requests || b.longueurs.length || 0);
+
+      $('tirage-detail').textContent =
+        'Mistral Batch — ' + (faits || 0) + '/' + (total || b.longueurs.length) +
+        ' · ' + (statut || 'EN ATTENTE');
+
+      if(statut === 'SUCCESS'){
+        if(Array.isArray(job.outputs) && job.outputs.length){
+          appliquerSortiesBatch(p, job.outputs);
+          return;
+        }
+        if(job.output_file){
+          return mistralBatchTexte(
+            '/v1/files/' + encodeURIComponent(job.output_file) + '/content',
+            cle
+          ).then(function(texte){
+            appliquerSortiesBatch(p, sortiesBatchDepuisTexte(texte));
+          });
+        }
+        throw new Error('Batch Mistral terminé sans résultats.');
+      }
+
+      if(
+        statut === 'FAILED' ||
+        statut === 'TIMEOUT_EXCEEDED' ||
+        statut === 'CANCELLED'
+      ){
+        p.batchMistral = null;
+        sauver();
+        var details = job && job.errors && job.errors.length
+          ? ' · ' + (job.errors[0].message || String(job.errors[0]))
+          : '';
+        throw new Error('Batch Mistral ' + statut + details);
+      }
+
+      return patienter(3000).then(poll);
+    });
+  }
+
+  return poll();
+}
+
+function depouillerTempsReel(p, lots, baseFiches, total, genre, generation){
+  var pos = 0;
+  var n = baseFiches;
+
+  function tranche(){
+    if(generation !== generationCoupe) return Promise.reject(interrompu());
+    if(pos >= lots.length) return Promise.resolve();
+
+    var numero = n + 1;
+    $('tirage-detail').textContent = p.nom + ' — tranche ' + numero + ' sur ' + total;
+    $('ecriture-quoi').textContent = 'Dépouillement : ' + numero + '/' + total;
+
+    var quoi = genre === 'scenario'
+      ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
+      : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
+
+    var portion = lots[pos];
+
+    return demander([
+      { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
+      { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
+    ], 0.4, 500).then(function(r){
+      p.fiches.push('[' + numero + '/' + total + '] ' + r.texte.trim());
+      p.depouillementOffset += portion.length;
+      pos++;
+      n++;
+      sauver();
+      return tranche();
+    });
+  }
+
+  return tranche();
+}
+
 /* ── Dépouillement : tranche par tranche, puis synthèse ─── */
 function depouiller(i){
   if(occupe) return;
@@ -1382,7 +1636,6 @@ function depouiller(i){
   if(!lots.length && !p.fiches.length){ service('Rien à dépouiller.'); return; }
 
   var n = p.fiches.length;
-  var pos = 0;
   var total = n + lots.length;
 
   if(n){
@@ -1392,38 +1645,39 @@ function depouiller(i){
     );
   }
 
-  moteur(true, 'Dépouillement', p.nom + ' — tranche ' + Math.min(n+1,total) + ' sur ' + total);
+  moteur(true, 'Dépouillement', p.nom + ' — ' + lots.length + ' tranche' + (lots.length>1?'s':'') + ' à traiter');
   $('ecriture').className = 'on';
   var generation = generationCoupe;
 
-  function tranche(){
-    if(generation !== generationCoupe) return Promise.reject(interrompu());
-    if(pos >= lots.length) return Promise.resolve();
+  var travail;
 
-    var numero = n + 1;
-    $('tirage-detail').textContent = p.nom + ' — tranche ' + numero + ' sur ' + total;
-    $('ecriture-quoi').textContent = 'Dépouillement : ' + numero + '/' + total;
-
-    var quoi = p.genre === 'scenario'
-      ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
-      : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
-
-    var portion = lots[pos];
-
-    return demander([
-      { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
-      { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
-    ], 0.4, 500).then(function(r){
-      p.fiches.push('[' + numero + '/' + total + '] ' + r.texte.trim());
-      p.depouillementOffset += portion.length;
-      pos++;
-      n++;
+  if(p.batchMistral && p.batchMistral.id){
+    service('Reprise du Batch Mistral déjà lancé.');
+    travail = attendreBatchDepouillement(p, generation);
+  } else if(batchMistralDisponible() && lots.length >= 3){
+    service('Document long : dépouillement envoyé en Batch Mistral pour éviter la saturation temps réel.');
+    travail = creerBatchDepouillement(
+      p,
+      lots,
+      n,
+      p.depouillementOffset,
+      total,
+      p.genre,
+      generation
+    ).catch(function(e){
+      if(e && e.coupe) throw e;
+      /* CORS, batch indisponible ou compte non éligible : aucun texte n'est
+         perdu, on revient automatiquement au pipeline multi-fournisseurs. */
+      p.batchMistral = null;
       sauver();
-      return tranche();
+      service('Batch Mistral indisponible — reprise en mode temps réel sécurisé.');
+      return depouillerTempsReel(p, lots, n, total, p.genre, generation);
     });
+  } else {
+    travail = depouillerTempsReel(p, lots, n, total, p.genre, generation);
   }
 
-  return tranche().then(function(){
+  return travail.then(function(){
     return recoudreFiches(p, generation);
   }).then(function(fiches){
     $('tirage-titre').textContent = 'Synthèse';
