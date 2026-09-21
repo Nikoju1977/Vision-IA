@@ -40,10 +40,24 @@ jobs:
           from pathlib import Path
 
           html = Path("index.html").read_text(encoding="utf-8")
-          assert "vai_cadence_v2" in html
+
+          assert "vai_cadence_v3" in html
           assert "pi.cadence = Math.max(0, p.cadence || 0);" in html
           assert "Math.min(18000, cible)" in html
           assert "depouillementOffset" in html
           assert "corrigerReservation(ticket, reel)" in html
-          print("Mistral throttle regression guards: OK")
+
+          # Batch requests must carry the model in each body.
+          assert "model: PROVIDERS.mistral.modele" in html
+          assert "requests: requests" in html
+
+          # A failed Batch must never fall straight back to Mistral realtime.
+          assert "demanderDepouillementSansMistral" in html
+          assert "Aucun moteur de secours configuré" in html
+
+          # Regression guard: old fixed 90-second retry arrays/messages are forbidden.
+          assert "[60, 90, 90, 90, 90, 90]" not in html
+          assert "reprise dans 90 s" not in html
+
+          print("Mistral Batch/throttle regression guards: OK")
           PY
