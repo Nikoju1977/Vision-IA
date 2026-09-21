@@ -1470,10 +1470,21 @@ function tranches(t, taille){
   return out;
 }
 
-function tailleTrancheDepouillement(){
-  /* Le dépouillement gratuit privilégie de petites tranches, compatibles avec
-     les plafonds TPM de Mistral et Groq. */
-  if(modeDepouillementGratuit()) return 3000;
+function strategieDepouillement(p, restant){
+  var mistral = !!sanitizeKey(trousseau.lire('mistral'));
+  var groq = !!sanitizeKey(trousseau.lire('groq'));
+  var cerebras = !!sanitizeKey(trousseau.lire('cerebras'));
+  if(groq && (restant > 60000 || p.fournisseurDepouillement === 'groq')) return 'groq';
+  if(mistral) return 'hybride';
+  if(groq || cerebras) return 'secours';
+  return 'aucun';
+}
+
+function tailleTrancheDepouillement(strategie){
+  /* Des tranches plus longues avec Groq réduisent fortement le nombre
+     de requêtes sur les scénarios et romans volumineux. */
+  if(strategie === 'groq' || strategie === 'secours') return 9000;
+  if(strategie === 'hybride') return 3000;
 
   var plafond = plafondJetons();
   if(!(plafond > 0)) return 18000;
@@ -1616,8 +1627,8 @@ function creerBatchDepouillement(p, lots, baseFiches, baseOffset, total, genre, 
   if(!cle) return Promise.reject(new Error('Clé Mistral absente.'));
 
   var quoi = genre === 'scenario'
-    ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
-    : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
+    ? 'Dépouille fidèlement cette portion de scénario : personnages réellement présents, actions effectivement écrites, enjeu dramatique explicite, décors et contraintes de tournage observables. N\'invente aucun fait, personnage, lieu, date, objet ni causalité. Si une information manque, écris « non précisé ». 120 mots maximum, texte suivi, aucune formule d\'introduction.'
+    : 'Dépouille fidèlement cette portion de texte : personnages réellement nommés, faits écrits, lieux explicitement présents et images fortes réellement décrites. N\'invente aucun fait, personnage, lieu, date, objet ni causalité. Si une information manque, écris « non précisé ». 120 mots maximum, texte suivi, aucune formule d\'introduction.';
 
   var requests = lots.map(function(portion, i){
     var numero = baseFiches + i + 1;
@@ -1628,7 +1639,7 @@ function creerBatchDepouillement(p, lots, baseFiches, baseOffset, total, genre, 
         max_tokens: 500,
         temperature: 0.4,
         messages: [
-          { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
+          { role:'system', content:'Tu es Vision-IA en mode script analyste. La portion fournie est ta seule source factuelle. Résume-la fidèlement sans rien ajouter ; toute incertitude doit rester explicite.' },
           { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
         ]
       }
@@ -1777,14 +1788,12 @@ function demanderDepouillementSansMistral(messages, temperature, maxJetons){
   var generation = generationCoupe;
   var dispo = clesTempsReelSansMistral();
   if(!dispo.length){
-    return Promise.reject(new Error(
-      'Batch Mistral indisponible et aucun moteur de secours (Groq/Cerebras) n\'est configuré. ' +
-      'Vision-IA ne relancera pas Mistral temps réel pour éviter une nouvelle attente de 90 s.'
-    ));
+    return Promise.reject(new Error('Aucun moteur de secours Groq/Cerebras n\'est configuré.'));
   }
 
   var i = 0;
   var dernier = null;
+  var reprises = 0;
   var estimation = estimerJetons(messages, maxJetons || 500);
 
   function essai(){
@@ -1813,7 +1822,8 @@ function demanderDepouillementSansMistral(messages, temperature, maxJetons){
           : '';
         if(!t) throw new Error('Réponse vide.');
         apaiser(p);
-        return { texte:t, moteur:p.nom };
+        reprises = 0;
+        return { texte:t, moteur:p.nom, fournisseur:dispo[i].id, modele:p.modele };
       }).catch(function(e){
         libererReservation(ticket);
         throw e;
@@ -1821,11 +1831,23 @@ function demanderDepouillementSansMistral(messages, temperature, maxJetons){
     }).catch(function(e){
       if(e && e.coupe) throw e;
       dernier = e;
-      i++;
-      if(i < dispo.length){
+      var saturable = e && (e.code === 429 || e.code >= 500);
+
+      if(saturable && i + 1 < dispo.length){
+        penaliser(p, e.attendre || 5);
+        i++;
+        reprises = 0;
         service('Secours immédiat : ' + PROVIDERS[dispo[i].id].nom + '.');
         return essai();
       }
+
+      if(saturable && reprises < 4){
+        var s = penaliser(p, e.attendre || (e.code === 429 ? 12 : 5));
+        reprises++;
+        service(p.nom + ' limité — reprise automatique dans ' + Math.ceil(s) + ' s (' + reprises + '/4).');
+        return essai();
+      }
+
       throw e;
     });
   }
@@ -1848,12 +1870,12 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
     $('ecriture-quoi').textContent = 'Dépouillement : ' + numero + '/' + total;
 
     var quoi = genre === 'scenario'
-      ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
-      : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
+      ? 'Dépouille fidèlement cette portion de scénario : personnages réellement présents, actions effectivement écrites, enjeu dramatique explicite, décors et contraintes de tournage observables. N\'invente aucun fait, personnage, lieu, date, objet ni causalité. Si une information manque, écris « non précisé ». 120 mots maximum, texte suivi, aucune formule d\'introduction.'
+      : 'Dépouille fidèlement cette portion de texte : personnages réellement nommés, faits écrits, lieux explicitement présents et images fortes réellement décrites. N\'invente aucun fait, personnage, lieu, date, objet ni causalité. Si une information manque, écris « non précisé ». 120 mots maximum, texte suivi, aucune formule d\'introduction.';
 
     var portion = lots[pos];
     var messages = [
-      { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
+      { role:'system', content:'Tu es Vision-IA en mode script analyste. La portion fournie est ta seule source factuelle. Résume-la fidèlement sans rien ajouter ; toute incertitude doit rester explicite.' },
       { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
     ];
 
@@ -1931,10 +1953,11 @@ function depouiller(i){
 
   p.depouillementOffset = Math.max(0, Math.min(c.texte.length, p.depouillementOffset));
 
-  var taille = modeDepouillementGratuit() && p.tailleTrancheMistral
-    ? Math.max(900, Math.min(3000, Number(p.tailleTrancheMistral) || 3000))
-    : tailleTrancheDepouillement();
   var reste = c.texte.slice(p.depouillementOffset);
+  var strategie = strategieDepouillement(p, reste.length);
+  var taille = strategie === 'hybride' && p.tailleTrancheMistral
+    ? Math.max(900, Math.min(3000, Number(p.tailleTrancheMistral) || 3000))
+    : tailleTrancheDepouillement(strategie);
   var lots = tranches(reste, taille);
 
   if(!lots.length && !p.fiches.length){ service('Rien à dépouiller.'); return; }
@@ -1958,8 +1981,13 @@ function depouiller(i){
   if(p.batchMistral && p.batchMistral.id){
     service('Reprise du Batch Mistral déjà lancé.');
     travail = attendreBatchDepouillement(p, generation);
-  } else if(modeDepouillementGratuit()){
-    service('Mode gratuit — Mistral puis Groq si une clé Groq est configurée.');
+  } else if(strategie === 'groq' || strategie === 'secours'){
+    service(strategie === 'groq'
+      ? 'Document long — Groq prend directement le dépouillement pour réduire le nombre de requêtes.'
+      : 'Dépouillement sur moteur de secours Groq/Cerebras.');
+    travail = depouillerTempsReel(p, lots, n, total, p.genre, generation, true);
+  } else if(strategie === 'hybride'){
+    service('Mode économique — Mistral puis bascule Groq immédiate si nécessaire.');
     travail = depouillerTempsReel(p, lots, n, total, p.genre, generation);
   } else if(batchMistralDisponible() && lots.length >= 3){
     service('Document long : dépouillement envoyé en Batch Mistral.');
@@ -2017,12 +2045,16 @@ function depouiller(i){
     $('tirage-titre').textContent = 'Synthèse';
     $('tirage-detail').textContent = p.fiches.length + ' tranches à recoudre';
     return demanderPourDepouillement([
-      { role:'system', content: etat.consigne },
+      { role:'system', content:
+        'Tu es Vision-IA en mode script analyste. Les fiches fournies sont ta seule source factuelle. ' +
+        'N\'ajoute aucun personnage, événement, lieu, date, lien causal ou contexte historique absent. ' +
+        'Sépare les faits du texte des propositions de réalisation ; si une donnée est incertaine, écris « à vérifier ».'
+      },
       { role:'user', content:
         'Voici mes fiches de dépouillement de « ' + p.nom +' », dans l\'ordre. ' +
         'Reconstitue une note de lecture de réalisateur, 400 à 600 mots en texte suivi : ' +
-        'l\'histoire et son arc, les personnages et ce que je demanderai au jeu, les lieux et leur lumière, ' +
-        'les séquences qui portent le film, et ce qui sera difficile à tourner. Pas de question à la fin.\n\n' +
+        'l\'histoire et son arc tels qu\'ils sont réellement établis, les personnages et les indications de jeu déductibles, les lieux et leur lumière décrite, ' +
+        'les séquences qui portent le film et les contraintes de tournage observables. Ne transforme jamais une proposition artistique en fait. Pas de question à la fin.\n\n' +
         fiches.join('\n\n') }
     ], 0.6, 1800);
   }).then(function(r){
