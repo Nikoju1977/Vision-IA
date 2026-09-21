@@ -4,16 +4,49 @@ Boucle agentique de génération, exécution contrôlée et correction de script
 
 ## Moteur IA : Mistral
 
-Le fournisseur principal est désormais `MistralProvider`, basé sur le SDK officiel `mistralai`.
+Le fournisseur principal est `MistralProvider`, basé sur le SDK officiel `mistralai`.
 
 Configuration :
 
 ```bash
-pip install -U mistralai
+pip install -r tools/auto_corrector/requirements.txt
 export MISTRAL_API_KEY="..."
 ```
 
+## Anti-saturation
+
+Le provider Mistral protège désormais les appels contre les saturations courantes :
+
+- cadence minimale configurable entre requêtes ;
+- retries exponentiels sur 429, 5xx et timeouts transitoires ;
+- jitter pour éviter les rafales de retry ;
+- limite de taille de prompt ;
+- compaction automatique d'un prompt trop volumineux ;
+- traitement séquentiel des documents longs.
+
+Pour les gros documents, utiliser `long_document_processor.py`. Il ne transmet jamais le document complet en un seul appel : il le découpe, analyse les fragments un par un puis fusionne les résultats par niveaux.
+
+Formats pris en charge :
+- TXT / Markdown / JSON / CSV ;
+- DOCX via la bibliothèque standard ;
+- PDF via `pypdf`.
+
 Exemple :
+
+```bash
+python tools/auto_corrector/analyze_long_document.py mon_document.pdf \
+  --objective "Dépouillement complet et détection des incohérences"
+```
+
+Réglages par défaut du mode long document :
+- fragments de 12 000 caractères ;
+- chevauchement de 600 caractères ;
+- fusion par lots de 4 ;
+- une seule requête Mistral à la fois ;
+- 6 retries maximum dans le CLI ;
+- délai minimum de 0,5 s entre appels dans le CLI.
+
+## Agent de code
 
 ```python
 from mistral_provider import create_mistral_agent
@@ -27,44 +60,26 @@ agent = create_mistral_agent(
 )
 
 result = agent.solve("Afficher les 50 premiers nombres de Fibonacci")
-
-if result.success:
-    print(result.code)
-else:
-    print(result.message)
 ```
-
-Le SDK Mistral force le mode JSON avec :
-
-```python
-response_format={"type": "json_object"}
-```
-
-Puis `VisionIAAgent` applique une validation stricte supplémentaire : la réponse doit contenir exactement les champs `analyse` et `code`.
 
 ## Architecture
 
 - `auto_corrector.py` : sandbox locale bornée et boucle d'auto-correction générique ;
 - `vision_ia_agent.py` : protocole agentique JSON strict, AST, historique et anti-boucle ;
-- `mistral_provider.py` : intégration Mistral ;
-- `test_auto_corrector.py` : tests unitaires hors réseau.
+- `mistral_provider.py` : Mistral avec retry, throttling et compaction ;
+- `long_document_processor.py` : découpage + synthèse hiérarchique ;
+- `analyze_long_document.py` : CLI pour gros fichiers ;
+- `test_auto_corrector.py` et `test_long_document.py` : tests hors réseau.
 
 ## Garde-fous
 
-- JSON strict : exactement `analyse` + `code`
-- validation AST avant exécution
-- Python isolé avec `-I -B`
-- répertoire temporaire par tentative
-- timeout
-- limites CPU/mémoire/fichiers/descripteurs sur POSIX
-- sortie stdout/stderr bornée
-- empreinte SHA-256 de chaque proposition
-- arrêt anti-boucle si le même code défaillant revient
-- historique structuré des itérations
-- aucune clé API stockée dans le dépôt
+- sortie JSON contrôlée ;
+- validation AST avant exécution de code ;
+- Python isolé avec `-I -B` ;
+- timeout ;
+- limites CPU/mémoire/fichiers sur POSIX ;
+- anti-boucle ;
+- aucune clé API stockée dans le dépôt ;
+- les documents longs ne sont pas injectés intégralement dans une seule requête.
 
-Cette couche réduit les risques d'accident mais n'est pas une sandbox de sécurité contre du code hostile. Pour du code non fiable provenant d'un tiers, utiliser un conteneur ou une sandbox OS dédiée.
-
-## Validation
-
-La CI vérifie la syntaxe de tous les modules et exécute les tests sans appel réseau.
+Cette couche réduit fortement les erreurs de saturation et de contexte, mais elle ne peut pas garantir qu'un service distant ne renverra jamais de 429 ou d'indisponibilité. Dans ce cas, les retries et la reprise par fragments limitent l'impact.
