@@ -55,7 +55,7 @@ Compter une requête par tranche : un scénario de long métrage fait environ 25
 
 ### Mode Mistral gratuit
 
-Quand **Mistral est la seule clé configurée**, Vision-IA n'utilise pas l'API Batch : les documents longs sont dépouillés via `/v1/chat/completions`, une tranche après l'autre. Chaque fiche est sauvegardée immédiatement et le traitement reprend à l'offset enregistré après une coupure ou un quota temporaire. Un `402` reçu lors d'une tentative Batch déclenche également ce repli vers Mistral temps réel au lieu de bloquer le film. Les `429` restent gérés par la cadence partagée et `Retry-After`.
+Quand **Mistral est la seule clé configurée**, Vision-IA n'utilise pas l'API Batch : les documents longs sont dépouillés via `/v1/chat/completions`, une tranche après l'autre. Le mode Free démarre à **4 500 signes par tranche**. Si Mistral renvoie un `429`, Vision-IA ne rejoue plus plusieurs fois la même grosse requête : il divise automatiquement la taille de tranche par deux (jusqu'à 1 200 signes), reconstruit le reste du travail et mémorise la taille qui fonctionne pour une reprise ultérieure. Chaque fiche réussie est sauvegardée immédiatement et l'offset n'avance jamais sur une requête refusée. Un `402` reçu lors d'une tentative Batch déclenche également le repli vers Mistral temps réel.
 
 ### Stockage
 
