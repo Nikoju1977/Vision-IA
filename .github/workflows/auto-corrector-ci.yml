@@ -13,6 +13,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -25,7 +26,10 @@ jobs:
           python -m py_compile tools/auto_corrector/auto_corrector.py
           python -m py_compile tools/auto_corrector/vision_ia_agent.py
           python -m py_compile tools/auto_corrector/mistral_provider.py
+          python -m py_compile tools/auto_corrector/long_document_processor.py
+          python -m py_compile tools/auto_corrector/analyze_long_document.py
           python -m py_compile tools/auto_corrector/test_auto_corrector.py
+          python -m py_compile tools/auto_corrector/test_long_document.py
 
       - name: Unit tests
         working-directory: tools/auto_corrector
