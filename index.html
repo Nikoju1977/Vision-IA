@@ -1096,14 +1096,27 @@ function demanderMistralGratuit(messages, temperature, maxJetons){
 
   var kg = sanitizeKey(trousseau.lire('groq'));
   if(kg){
-    candidats.push({
+    /* Groq passe avant le second modèle Mistral lorsqu'il est disponible :
+       deux modèles Mistral partagent souvent le même quota de compte. */
+    var groqCandidat = {
       id:'groq',
       nom:'Groq GPT-OSS 20B',
       modele:'openai/gpt-oss-20b',
       p:PROVIDERS.groq,
       k:kg
-    });
+    };
+    var insertion = km ? 1 : 0;
+    candidats.splice(insertion, 0, groqCandidat);
   }
+
+  /* Un fournisseur refroidi après un 429 va en fin de liste. Cela évite
+     d'attendre son Retry-After alors qu'un autre moteur est immédiatement prêt. */
+  var cadence = cadenceLire();
+  candidats.sort(function(a,b){
+    var aa = (piste(cadence, a.p.url).bloque || 0) > Date.now() ? 1 : 0;
+    var bb = (piste(cadence, b.p.url).bloque || 0) > Date.now() ? 1 : 0;
+    return aa - bb;
+  });
 
   if(!candidats.length){
     return Promise.reject(new Error(
@@ -1159,14 +1172,17 @@ function demanderMistralGratuit(messages, temperature, maxJetons){
         if(e && e.coupe) throw e;
         dernier = e;
 
+        if(e && (e.code === 429 || e.code >= 500)){
+          penaliser(c.p, e.attendre || (e.code === 429 ? 12 : 5));
+        }
+
         if(indice + 1 < candidats.length){
           var suivant = candidats[indice + 1];
-          service(c.nom + ' indisponible — bascule sur ' + suivant.nom + '.');
+          service(c.nom + ' indisponible — bascule immédiate sur ' + suivant.nom + '.');
           indice++;
           return essai();
         }
 
-        if(e && e.code === 429) penaliser(c.p, e.attendre || 12);
         throw e;
       });
     });
