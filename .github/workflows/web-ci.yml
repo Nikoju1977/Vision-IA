@@ -51,13 +51,18 @@ jobs:
           assert "model: PROVIDERS.mistral.modele" in html
           assert "requests: requests" in html
 
-          # A failed Batch must never fall straight back to Mistral realtime.
+          # Mistral-only configuration must use the free realtime path, not Batch.
+          assert "function modeMistralGratuit()" in html
+          assert "Mode Mistral gratuit" in html
+          assert "e && e.code === 402" in html
+          assert "poursuite en Mistral gratuit" in html
+
+          # Other Batch failures can still use configured non-Mistral fallbacks.
           assert "demanderDepouillementSansMistral" in html
-          assert "Aucun moteur de secours configuré" in html
 
           # Regression guard: old fixed 90-second retry arrays/messages are forbidden.
           assert "[60, 90, 90, 90, 90, 90]" not in html
           assert "reprise dans 90 s" not in html
 
-          print("Mistral Batch/throttle regression guards: OK")
+          print("Mistral Free/Batch/throttle regression guards: OK")
           PY
