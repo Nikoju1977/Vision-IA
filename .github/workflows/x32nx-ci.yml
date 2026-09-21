@@ -1,0 +1,28 @@
+name: Vision-IA X32-NX Quality Control
+
+on:
+  push:
+    paths:
+      - "native/x32nx/**"
+      - ".github/workflows/x32nx-ci.yml"
+  pull_request:
+    paths:
+      - "native/x32nx/**"
+      - ".github/workflows/x32nx-ci.yml"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: native/x32nx
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker QA image
+        run: docker build -t vision-ia-x32nx .
+
+      - name: Run CTest in QA image
+        run: docker run --rm vision-ia-x32nx bash -lc "ctest --test-dir build --output-on-failure"

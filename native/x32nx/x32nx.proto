@@ -1,0 +1,10 @@
+syntax = "proto3";
+package x32nx;
+
+message StreamPacket {
+  uint32 sequence_number = 1;
+  uint64 timestamp_ms = 2;
+  uint32 video_allocation_ratio = 3;
+  bytes video_payload = 4;
+  bytes audio_payload = 5;
+}
