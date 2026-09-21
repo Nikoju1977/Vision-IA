@@ -564,7 +564,7 @@ var PROVIDERS = {
   mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest',    cadence:1800 }
 };
 /* Cadence minimale locale ; les quotas réels dépendent du compte. */
-var CADENCE_ETAT = 'vai_cadence_v4';
+var CADENCE_ETAT = 'vai_cadence_v5';
 var PLAFOND_CLE = 'vai_plafond_jetons';
 var FENETRE_JETONS = 60000;
 var ORDRE = ['mistral','groq','cerebras'];
@@ -731,6 +731,20 @@ function couper(){
 }
 function interrompu(){ var e = new Error('Génération coupée.'); e.coupe = true; return e; }
 
+function detailErreurApi(texte){
+  try {
+    var o = JSON.parse(texte || '{}');
+    if(typeof o.message === 'string' && o.message) return o.message;
+    if(o.error){
+      if(typeof o.error === 'string') return o.error;
+      if(typeof o.error.message === 'string' && o.error.message) return o.error.message;
+      if(typeof o.error.detail === 'string' && o.error.detail) return o.error.detail;
+    }
+    if(typeof o.detail === 'string' && o.detail) return o.detail;
+  } catch(e){}
+  return '';
+}
+
 function xhrJson(url, corps, entetes, delai){
   return new Promise(function(resoudre, rejeter){
     var x = new XMLHttpRequest();
@@ -746,8 +760,7 @@ function xhrJson(url, corps, entetes, delai){
         try { resoudre(JSON.parse(x.responseText)); }
         catch(e){ rejeter(new Error('Réponse illisible du modèle.')); }
       } else {
-        var d = '';
-        try { d = (JSON.parse(x.responseText).error || {}).message || ''; } catch(e){}
+        var d = detailErreurApi(x.responseText);
         var err = new Error(libelleHttp(x.status, d));
         err.code = x.status;
         err.attendre = secondesAvantReprise(x);
@@ -1048,34 +1061,65 @@ function demanderMistralGratuit(messages, temperature, maxJetons){
   if(!k) return Promise.reject(new Error('Clé Mistral absente.'));
 
   var estimation = estimerJetons(messages, maxJetons || 500);
+  var modeles = [
+    { id:'ministral-3b-latest', nom:'Ministral 3B' },
+    { id:'mistral-small-latest', nom:'Mistral Small' }
+  ];
+  var indice = 0;
+  var dernier = null;
 
-  return tourDeRole(p, estimation, generation).then(function(ticket){
-    if(generation !== generationCoupe) throw interrompu();
-
-    return xhrJson(p.url, {
-      model: p.modele,
-      messages: messages,
-      temperature: (temperature == null ? 0.4 : temperature),
-      max_tokens: maxJetons || 500
-    }, {
-      Authorization: 'Bearer ' + k
-    }).then(function(r){
-      var reel = r && r.usage && Number(r.usage.total_tokens);
-      if(reel > 0) corrigerReservation(ticket, reel);
-      var t = r && r.choices && r.choices[0] && r.choices[0].message
-        ? r.choices[0].message.content
-        : '';
-      if(!t) throw new Error('Réponse vide.');
-      apaiser(p);
-      return { texte:t, moteur:p.nom };
-    }).catch(function(e){
-      libererReservation(ticket);
-      if(e && e.code === 429){
-        penaliser(p, e.attendre || 12);
+  function essai(){
+    if(indice >= modeles.length){
+      var fin = dernier || new Error('Mistral Free indisponible.');
+      if(fin && fin.code === 429){
+        fin.message =
+          'Quota Mistral Free atteint sur Ministral 3B et Mistral Small (429). ' +
+          'Le quota vient du Workspace Mistral, pas du document. Vérifiez Studio → API → Limits.';
       }
-      throw e;
+      return Promise.reject(fin);
+    }
+
+    var modele = modeles[indice];
+
+    return tourDeRole(p, estimation, generation).then(function(ticket){
+      if(generation !== generationCoupe) throw interrompu();
+      $('ecriture-quoi').textContent = 'Dépouillement — ' + modele.nom;
+
+      return xhrJson(p.url, {
+        model: modele.id,
+        messages: messages,
+        temperature: (temperature == null ? 0.4 : temperature),
+        max_tokens: maxJetons || 500
+      }, {
+        Authorization: 'Bearer ' + k
+      }).then(function(r){
+        var reel = r && r.usage && Number(r.usage.total_tokens);
+        if(reel > 0) corrigerReservation(ticket, reel);
+        var t = r && r.choices && r.choices[0] && r.choices[0].message
+          ? r.choices[0].message.content
+          : '';
+        if(!t) throw new Error('Réponse vide.');
+        apaiser(p);
+        return { texte:t, moteur:modele.nom, modele:modele.id };
+      }).catch(function(e){
+        libererReservation(ticket);
+        if(e && e.coupe) throw e;
+        dernier = e;
+
+        if(e && e.code === 429 && indice + 1 < modeles.length){
+          var pause = Math.max(1, Number(e.attendre) || 3);
+          service(modele.nom + ' limité — essai gratuit avec ' + modeles[indice+1].nom + '.');
+          indice++;
+          return patienter(pause * 1000).then(essai);
+        }
+
+        if(e && e.code === 429) penaliser(p, e.attendre || 12);
+        throw e;
+      });
     });
-  });
+  }
+
+  return essai();
 }
 
 function demanderPourDepouillement(messages, temperature, maxJetons){
@@ -1128,11 +1172,11 @@ function xhrFlux(url, corps, entetes, onMorceau, delai, ticket){
         if(usageTotal > 0) corrigerReservation(ticket, usageTotal);
         if(!texte) ko(new Error('Flux vide.')); else ok(texte);
       } else {
-        var d = '';
-        try { d = (JSON.parse(x.responseText).error || {}).message || ''; } catch(e){}
+        var d = detailErreurApi(x.responseText);
         var err = new Error(libelleHttp(x.status, d));
         err.code = x.status;
         err.attendre = secondesAvantReprise(x);
+        err.detail = d;
         libererReservation(ticket);
         ko(err);
       }
@@ -1353,17 +1397,11 @@ function tranches(t, taille){
 }
 
 function tailleTrancheDepouillement(){
-  /* Le palier gratuit Mistral est beaucoup plus sensible au TPM. 18 k signes
-     produisaient des requêtes d'environ 6–7 k jetons et pouvaient prendre un
-     429 dès la première tranche. On démarre volontairement petit ; si Mistral
-     refuse encore, depouillerTempsReel() réduit automatiquement la taille. */
-  if(modeMistralGratuit()) return 4500;
+  if(modeMistralGratuit()) return 3000;
 
   var plafond = plafondJetons();
   if(!(plafond > 0)) return 18000;
 
-  /* On maximise la tranche tout en gardant ~10 % de marge sur le plafond
-     local. Sortie (500) + consignes/enveloppe (~300) sont réservées. */
   var cible = Math.floor((plafond * 0.90 - 800) * 3);
   return Math.max(6000, Math.min(18000, cible));
 }
@@ -1425,8 +1463,7 @@ function mistralBatchRequete(methode, chemin, cle, corps){
     if(corps != null) x.setRequestHeader('Content-Type', 'application/json');
 
     function erreur(){
-      var detail = '';
-      try { detail = (JSON.parse(x.responseText).error || {}).message || ''; } catch(e){}
+      var detail = detailErreurApi(x.responseText);
       var err = new Error(libelleHttp(x.status, detail));
       err.code = x.status;
       err.attendre = secondesAvantReprise(x);
@@ -1718,7 +1755,7 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
   var pos = 0;
   var n = baseFiches;
   var mistralFree = !sansMistral && modeMistralGratuit();
-  var MIN_TRANCHE_FREE = 1200;
+  var MIN_TRANCHE_FREE = 900;
 
   function tranche(){
     if(generation !== generationCoupe) return Promise.reject(interrompu());
@@ -1747,6 +1784,7 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
 
     return appel.then(function(r){
       p.fiches.push('[' + numero + '/' + total + '] ' + r.texte.trim());
+      if(r && r.modele) p.modeleDepouillementMistral = r.modele;
       p.depouillementOffset += portion.length;
       pos++;
       n++;
@@ -1772,6 +1810,11 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
         return tranche();
       }
 
+      if(mistralFree && e && e.code === 429){
+        e.message =
+          'Quota Mistral Free indisponible (429), même avec Ministral 3B, Mistral Small et une tranche de 900 signes. ' +
+          'Le blocage vient du quota du Workspace Mistral, pas du PDF/DOCX.';
+      }
       throw e;
     });
   }
@@ -1807,7 +1850,7 @@ function depouiller(i){
   p.depouillementOffset = Math.max(0, Math.min(c.texte.length, p.depouillementOffset));
 
   var taille = modeMistralGratuit() && p.tailleTrancheMistral
-    ? Math.max(1200, Math.min(4500, Number(p.tailleTrancheMistral) || 4500))
+    ? Math.max(900, Math.min(3000, Number(p.tailleTrancheMistral) || 3000))
     : tailleTrancheDepouillement();
   var reste = c.texte.slice(p.depouillementOffset);
   var lots = tranches(reste, taille);
