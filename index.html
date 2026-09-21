@@ -559,12 +559,12 @@ var ACCUEIL =
 "Donnez-moi le pitch, ou à défaut le genre : c'est de là que part tout le reste. Une ligne suffit pour commencer.";
 
 var PROVIDERS = {
-  groq:     { nom:'Groq',     url:'https://api.groq.com/openai/v1/chat/completions', cle:'vai_k_groq',     modele:'llama-3.3-70b-versatile', cadence:2100 },
+  groq:     { nom:'Groq',     url:'https://api.groq.com/openai/v1/chat/completions', cle:'vai_k_groq',     modele:'openai/gpt-oss-20b',      cadence:2100 },
   cerebras: { nom:'Cerebras', url:'https://api.cerebras.ai/v1/chat/completions',     cle:'vai_k_cerebras', modele:'llama-3.3-70b',           cadence:1200 },
   mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest',    cadence:1800 }
 };
 /* Cadence minimale locale ; les quotas réels dépendent du compte. */
-var CADENCE_ETAT = 'vai_cadence_v5';
+var CADENCE_ETAT = 'vai_cadence_v6';
 var PLAFOND_CLE = 'vai_plafond_jetons';
 var FENETRE_JETONS = 60000;
 var ORDRE = ['mistral','groq','cerebras'];
@@ -1056,64 +1056,100 @@ function demander(messages, temperature, maxJetons){
    réduire la tranche au lieu de renvoyer six fois la même charge. */
 function demanderMistralGratuit(messages, temperature, maxJetons){
   var generation = generationCoupe;
-  var p = PROVIDERS.mistral;
-  var k = sanitizeKey(trousseau.lire('mistral'));
-  if(!k) return Promise.reject(new Error('Clé Mistral absente.'));
-
   var estimation = estimerJetons(messages, maxJetons || 500);
-  var modeles = [
-    { id:'ministral-3b-latest', nom:'Ministral 3B' },
-    { id:'mistral-small-latest', nom:'Mistral Small' }
-  ];
+  var candidats = [];
+
+  var km = sanitizeKey(trousseau.lire('mistral'));
+  if(km){
+    candidats.push({
+      id:'mistral',
+      nom:'Ministral 3B',
+      modele:'ministral-3b-latest',
+      p:PROVIDERS.mistral,
+      k:km
+    });
+    candidats.push({
+      id:'mistral',
+      nom:'Mistral Small',
+      modele:'mistral-small-latest',
+      p:PROVIDERS.mistral,
+      k:km
+    });
+  }
+
+  var kg = sanitizeKey(trousseau.lire('groq'));
+  if(kg){
+    candidats.push({
+      id:'groq',
+      nom:'Groq GPT-OSS 20B',
+      modele:'openai/gpt-oss-20b',
+      p:PROVIDERS.groq,
+      k:kg
+    });
+  }
+
+  if(!candidats.length){
+    return Promise.reject(new Error(
+      'Aucune clé Mistral ou Groq configurée pour le dépouillement gratuit.'
+    ));
+  }
+
   var indice = 0;
   var dernier = null;
 
   function essai(){
-    if(indice >= modeles.length){
-      var fin = dernier || new Error('Mistral Free indisponible.');
+    if(indice >= candidats.length){
+      var fin = dernier || new Error('Tous les moteurs gratuits ont refusé.');
       if(fin && fin.code === 429){
         fin.message =
-          'Quota Mistral Free atteint sur Ministral 3B et Mistral Small (429). ' +
-          'Le quota vient du Workspace Mistral, pas du document. Vérifiez Studio → API → Limits.';
+          'Quotas gratuits atteints (429) sur les moteurs configurés. ' +
+          'Les fiches déjà faites sont conservées ; réessayez après la remise à zéro des quotas.';
       }
       return Promise.reject(fin);
     }
 
-    var modele = modeles[indice];
+    var c = candidats[indice];
 
-    return tourDeRole(p, estimation, generation).then(function(ticket){
+    return tourDeRole(c.p, estimation, generation).then(function(ticket){
       if(generation !== generationCoupe) throw interrompu();
-      $('ecriture-quoi').textContent = 'Dépouillement — ' + modele.nom;
+      $('ecriture-quoi').textContent = 'Dépouillement — ' + c.nom;
 
-      return xhrJson(p.url, {
-        model: modele.id,
+      return xhrJson(c.p.url, {
+        model: c.modele,
         messages: messages,
         temperature: (temperature == null ? 0.4 : temperature),
         max_tokens: maxJetons || 500
       }, {
-        Authorization: 'Bearer ' + k
+        Authorization: 'Bearer ' + c.k
       }).then(function(r){
         var reel = r && r.usage && Number(r.usage.total_tokens);
         if(reel > 0) corrigerReservation(ticket, reel);
+
         var t = r && r.choices && r.choices[0] && r.choices[0].message
           ? r.choices[0].message.content
           : '';
         if(!t) throw new Error('Réponse vide.');
-        apaiser(p);
-        return { texte:t, moteur:modele.nom, modele:modele.id };
+
+        apaiser(c.p);
+        return {
+          texte:t,
+          moteur:c.nom,
+          modele:c.modele,
+          fournisseur:c.id
+        };
       }).catch(function(e){
         libererReservation(ticket);
         if(e && e.coupe) throw e;
         dernier = e;
 
-        if(e && e.code === 429 && indice + 1 < modeles.length){
-          var pause = Math.max(1, Number(e.attendre) || 3);
-          service(modele.nom + ' limité — essai gratuit avec ' + modeles[indice+1].nom + '.');
+        if(indice + 1 < candidats.length){
+          var suivant = candidats[indice + 1];
+          service(c.nom + ' indisponible — bascule sur ' + suivant.nom + '.');
           indice++;
-          return patienter(pause * 1000).then(essai);
+          return essai();
         }
 
-        if(e && e.code === 429) penaliser(p, e.attendre || 12);
+        if(e && e.code === 429) penaliser(c.p, e.attendre || 12);
         throw e;
       });
     });
@@ -1123,7 +1159,7 @@ function demanderMistralGratuit(messages, temperature, maxJetons){
 }
 
 function demanderPourDepouillement(messages, temperature, maxJetons){
-  return modeMistralGratuit()
+  return modeDepouillementGratuit()
     ? demanderMistralGratuit(messages, temperature, maxJetons)
     : demander(messages, temperature, maxJetons);
 }
@@ -1397,7 +1433,9 @@ function tranches(t, taille){
 }
 
 function tailleTrancheDepouillement(){
-  if(modeMistralGratuit()) return 3000;
+  /* Le dépouillement gratuit privilégie de petites tranches, compatibles avec
+     les plafonds TPM de Mistral et Groq. */
+  if(modeDepouillementGratuit()) return 3000;
 
   var plafond = plafondJetons();
   if(!(plafond > 0)) return 18000;
@@ -1521,6 +1559,11 @@ function sortiesBatchDepuisTexte(texte){
 function modeMistralGratuit(){
   var dispo = cles();
   return dispo.length === 1 && dispo[0].id === 'mistral';
+}
+
+function modeDepouillementGratuit(){
+  return !!sanitizeKey(trousseau.lire('mistral')) ||
+         !!sanitizeKey(trousseau.lire('groq'));
 }
 
 function batchMistralDisponible(){
@@ -1754,7 +1797,7 @@ function demanderDepouillementSansMistral(messages, temperature, maxJetons){
 function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sansMistral){
   var pos = 0;
   var n = baseFiches;
-  var mistralFree = !sansMistral && modeMistralGratuit();
+  var gratuitHybride = !sansMistral && modeDepouillementGratuit();
   var MIN_TRANCHE_FREE = 900;
 
   function tranche(){
@@ -1770,7 +1813,6 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
       : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
 
     var portion = lots[pos];
-
     var messages = [
       { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
       { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
@@ -1778,13 +1820,14 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
 
     var appel = sansMistral
       ? demanderDepouillementSansMistral(messages, 0.4, 500)
-      : (mistralFree
+      : (gratuitHybride
           ? demanderMistralGratuit(messages, 0.4, 500)
           : demander(messages, 0.4, 500));
 
     return appel.then(function(r){
       p.fiches.push('[' + numero + '/' + total + '] ' + r.texte.trim());
-      if(r && r.modele) p.modeleDepouillementMistral = r.modele;
+      if(r && r.modele) p.modeleDepouillement = r.modele;
+      if(r && r.fournisseur) p.fournisseurDepouillement = r.fournisseur;
       p.depouillementOffset += portion.length;
       pos++;
       n++;
@@ -1793,7 +1836,7 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
     }).catch(function(e){
       if(e && e.coupe) throw e;
 
-      if(mistralFree && e && e.code === 429 && portion.length > MIN_TRANCHE_FREE){
+      if(gratuitHybride && e && e.code === 429 && portion.length > MIN_TRANCHE_FREE){
         var nouvelleTaille = Math.max(MIN_TRANCHE_FREE, Math.floor(portion.length / 2));
         var texteRestant = lots.slice(pos).join('');
         var nouveauxLots = tranches(texteRestant, nouvelleTaille);
@@ -1804,16 +1847,16 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
         sauver();
 
         service(
-          'Mistral Free limite cette charge — tranches réduites à ' +
+          'Quota temporaire — tranches réduites à ' +
           nouvelleTaille + ' signes, reprise automatique.'
         );
         return tranche();
       }
 
-      if(mistralFree && e && e.code === 429){
+      if(gratuitHybride && e && e.code === 429){
         e.message =
-          'Quota Mistral Free indisponible (429), même avec Ministral 3B, Mistral Small et une tranche de 900 signes. ' +
-          'Le blocage vient du quota du Workspace Mistral, pas du PDF/DOCX.';
+          'Quotas gratuits indisponibles (429), même avec une tranche de 900 signes. ' +
+          'Le document est intact et les fiches déjà faites sont conservées.';
       }
       throw e;
     });
@@ -1849,7 +1892,7 @@ function depouiller(i){
 
   p.depouillementOffset = Math.max(0, Math.min(c.texte.length, p.depouillementOffset));
 
-  var taille = modeMistralGratuit() && p.tailleTrancheMistral
+  var taille = modeDepouillementGratuit() && p.tailleTrancheMistral
     ? Math.max(900, Math.min(3000, Number(p.tailleTrancheMistral) || 3000))
     : tailleTrancheDepouillement();
   var reste = c.texte.slice(p.depouillementOffset);
@@ -1876,8 +1919,8 @@ function depouiller(i){
   if(p.batchMistral && p.batchMistral.id){
     service('Reprise du Batch Mistral déjà lancé.');
     travail = attendreBatchDepouillement(p, generation);
-  } else if(modeMistralGratuit()){
-    service('Mode Mistral gratuit — dépouillement tranche par tranche, avec reprise automatique.');
+  } else if(modeDepouillementGratuit()){
+    service('Mode gratuit — Mistral puis Groq si une clé Groq est configurée.');
     travail = depouillerTempsReel(p, lots, n, total, p.genre, generation);
   } else if(batchMistralDisponible() && lots.length >= 3){
     service('Document long : dépouillement envoyé en Batch Mistral.');
