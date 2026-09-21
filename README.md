@@ -1,103 +1,148 @@
 # Vision-IA
 
-Agent autonome qui tient le rôle de réalisateur : il prend le projet au pitch et le mène jusqu'aux directives de production.
+Vision-IA est un réalisateur agentique de cinéma, pensé pour accompagner un projet du pitch au dossier de production sans serveur applicatif ni chaîne de build.
 
-**Application single-file HTML.** Aucune dépendance, aucun build, aucun serveur. Les clés API restent sur l'appareil.
+L'application tient dans `index.html` et fonctionne comme une PWA. Elle lit des documents de travail, construit le contexte du film, produit une note d'intention, un découpage technique, un conducteur, un parti pris d'image, des directives de production et un dossier exportable.
 
-## Les six phases
+## Phases de travail
 
-1. **Plateau** — dialogue avec l'agent. Il questionne, tranche, demande la validation du producteur avant chaque étape.
-2. **Note d'intention** — 450 à 650 mots, à la première personne : sujet, parti pris, image et son, direction d'acteurs.
-3. **Découpage** — tableau de plans (échelle, mouvement, focale, angle, durée, intention), chaque case corrigible au clavier.
-4. **Image** — palette de 5 à 6 teintes avec nuancier, matière de l'image, lumière, optiques, références.
-5. **Production** — casting, repérages, équipe, musique, calibrés sur les moyens annoncés, plus trois risques et leur parade.
-6. **Dossier** — export Markdown, sauvegarde JSON, impression.
+1. **Plateau** — dialogue avec Vision-IA et classeur du film.
+2. **Note d'intention** — sujet, mise en scène, image/son et direction d'acteurs.
+3. **Découpage technique** — plans, échelles, mouvements, focales, angles, durées et intentions.
+4. **Conducteur** — séquences, I/E, moments, durée estimée et regroupement par décor.
+5. **Parti pris d'image** — palette, matière, lumière, optiques et références.
+6. **Production** — casting, repérages, équipe, matériel, musique, son et risques.
+7. **Dossier** — Markdown, sauvegarde JSON et impression propre.
+
+## Sources et cohérence
+
+Les documents du classeur sont la source factuelle du projet. Vision-IA sépare désormais :
+
+- les informations réellement présentes dans les documents ;
+- les déductions ;
+- les propositions de mise en scène ;
+- les éléments à vérifier.
+
+Lorsqu'une séquence de scénario est choisie pour le découpage, son texte devient la **source unique de la séquence**. Le découpage est lié à cette source par un identifiant persistant ; « Ajouter des plans » refuse de mélanger deux séquences différentes.
+
+Pour les projets historiques et documentaires, les prompts interdisent d'introduire comme faits des personnages, lieux, dates, objets, événements ou causalités absents des sources.
+
+## Classeur du film
+
+Formats lus :
+
+- PDF texte, jusqu'à 400 pages ;
+- DOCX ;
+- TXT, Markdown, Fountain, FDX, RTF et CSV ;
+- images de repérage.
+
+Les corps de texte sont conservés dans IndexedDB ; les métadonnées du projet utilisent `safeStorage`. Jusqu'à 900 000 caractères sont conservés par pièce.
+
+La détection distingue scénario, livre et texte. Les séquences de scénario alimentent le Conducteur et le sélecteur de Découpage ; les chapitres d'un livre ne sont plus proposés comme séquences de tournage.
+
+## Dépouillement des documents longs
+
+Le dépouillement est reprenable. Chaque fiche réussie est sauvegardée immédiatement avec un offset de progression.
+
+Routage actuel :
+
+- si **Groq** est configuré et qu'il reste plus de 60 000 caractères, le document long est envoyé directement vers Groq par tranches d'environ 9 000 caractères ;
+- sinon, avec Mistral, le mode économique travaille par tranches d'environ 3 000 caractères et peut basculer sur Groq ;
+- sans Mistral, Groq/Cerebras assurent le secours ;
+- un `429` ou un `5xx` déclenche refroidissement, reprise bornée et bascule vers un moteur disponible ;
+- le `Retry-After` du fournisseur est respecté.
+
+La synthèse finale utilise un prompt de **script analyste**, pas le prompt créatif du réalisateur, afin d'éviter qu'une proposition artistique devienne un fait du scénario.
 
 ## Moteurs
 
-Chaîne de secours automatique : Mistral → Groq (GPT-OSS 20B) → Cerebras. Une clé suffit ; avec plusieurs, l'app bascule seule si un fournisseur tombe.
+Chaîne générale :
 
-Clés à récupérer sur `console.groq.com`, `cloud.cerebras.ai`, `console.mistral.ai`. Elles sont stockées via `safeStorage` (localStorage avec repli mémoire) et ne quittent l'appareil que vers le fournisseur choisi.
+- **Mistral** — `mistral-small-latest` ;
+- **Groq** — `openai/gpt-oss-20b` ;
+- **Cerebras** — `llama-3.3-70b`.
 
-## Conventions Studio Niko Design
+Pour l'analyse visuelle des repérages, Vision-IA utilise **Ministral 3** via `ministral-3b-latest`.
 
-- XHR uniquement pour les appels API — compatibilité origine nulle sur Android
-- `sanitizeKey()` sur toute saisie de clé
-- `safeStorage` : localStorage + repli en mémoire
-- 100dvh, `safe-area-inset`, `viewport-fit=cover`, saisies à 16 px minimum (pas de zoom iOS)
-- Validation avant livraison : `node --check`, zéro ID dupliqué, bijection `getElementById`, zéro `fetch()`
-- Typographies : Bebas Neue (titrage) et Courier Prime (corps, convention scénario)
+En dépouillement économique, si Mistral est temporairement limité, Vision-IA pénalise le fournisseur et bascule immédiatement vers Groq lorsqu'il est disponible. Un fournisseur encore en refroidissement passe derrière les moteurs prêts.
+
+Les quotas réels dépendent du compte et du fournisseur ; l'application ne suppose pas de seuil universel.
+
+## Sécurité des clés
+
+Les clés API passent toutes par `sanitizeKey()`.
+
+Elles ne sont pas conservées en clair :
+
+- coffre AES-256-GCM ;
+- clé dérivée par PBKDF2-SHA256, 310 000 tours ;
+- sel aléatoire de 16 octets ;
+- IV aléatoire de 12 octets renouvelé à chaque écriture ;
+- phrase de passe jamais persistée ;
+- sans phrase de passe, les clés restent uniquement en RAM et disparaissent au rechargement.
+
+L'analyse d'image lit elle aussi la clé Mistral dans ce coffre, et non dans le stockage en clair.
+
+## Conducteur et plan de travail
+
+Le Conducteur est calculé localement à partir des en-têtes de séquence, sans appel IA :
+
+- nombre de séquences ;
+- durée estimée ;
+- décors distincts ;
+- intérieurs/extérieurs ;
+- séquences de nuit ;
+- regroupement par décor.
+
+Le Conducteur et le plan de travail par décor sont également intégrés au dossier Markdown.
+
+## Storyboard
+
+Le storyboard est construit depuis les plans du découpage avec Pollinations. Le prompt reprend l'échelle, l'angle, la focale, l'action, le genre, le décor et, lorsqu'elle existe, la palette du film. Un nouveau découpage de séquence efface les vues de l'ancienne source pour éviter la contamination.
+
+## Export et impression
+
+Le dossier conserve :
+
+- titre et métadonnées ;
+- note d'intention ;
+- découpage et source verrouillée ;
+- conducteur ;
+- plan de travail par décor ;
+- parti pris d'image ;
+- directives de production ;
+- repérages et notes de lecture.
+
+À l'impression, seule la vue Dossier est imprimée. Les toasts, barres d'état, écrans de travail et autres phases ne sont plus capturés dans le PDF.
+
+## Compatibilité et architecture
+
+- application single-file : logique intégrée à `index.html` ;
+- appels modèles en `XMLHttpRequest`, notamment pour la compatibilité Android/origine nulle ;
+- pdf.js et Mammoth chargés depuis CDN et préchargés par le service worker ;
+- `index.html` en réseau d'abord pour éviter de rester bloqué sur une ancienne version ;
+- service worker versionné ;
+- interface mobile avec `100dvh`, safe areas et champs à 16 px minimum.
+
+## Qualité
+
+La CI GitHub vérifie notamment :
+
+- syntaxe JavaScript avec `node --check` ;
+- garde-fous de cadence et reprise ;
+- présence du routage Groq pour documents longs ;
+- absence de l'ancien modèle Pixtral déprécié ;
+- absence de lecture de clé Vision en clair ;
+- discipline de source et verrouillage du découpage ;
+- nettoyage de l'impression ;
+- non-régression des anciens délais fixes.
 
 ## Installation
 
-Ouvrir `index.html`. Sur GitHub Pages ou Vercel, servir la racine du dépôt. PWA installable (manifest + service worker, coquille en cache pour l'ouverture hors ligne).
+Ouvrir `index.html` directement ou utiliser GitHub Pages :
+
+https://nikoju1977.github.io/Vision-IA/
 
 ---
 
 Studio Niko Design
-
-## Classeur du film
-
-Vision-IA travaille sur pièces. Tout ce qui est versé au classeur entre dans son contexte et nourrit la note, le découpage, l'image et les directives.
-
-- **Documents** — PDF (pdf.js, jusqu'à 400 pages, lignes reconstruites depuis l'ordonnée des blocs pour préserver les en-têtes de séquence), DOCX (mammoth), TXT, MD, Fountain, FDX, CSV. Glisser-déposer accepté. Jusqu'à 900 k signes conservés par pièce, soit un roman entier.
-- **Repérages** — une photo de lieu est lue par Pixtral : architecture et matières, lumière disponible et son orientation, axes de caméra possibles, coût de tournage, usage dans ce film. Seule une vignette de 160 px est conservée, pas l'image d'origine.
-
-### Scénarios
-
-Les en-têtes de séquence sont repérés à l'import (`INT.`, `EXT.`, `INT./EXT.`, `SÉQUENCE 12`, numérotés ou non). Le classeur annonce le nombre de séquences, et la vue Découpage propose un sélecteur : choisir une séquence injecte son **texte intégral** dans le prompt de découpage — pas un résumé. Le réalisateur découpe donc les dialogues et les actions réellement écrits.
-
-### Livres et textes longs
-
-Les chapitres sont repérés de la même façon. Au-delà de 5 k signes, un bouton **Dépouiller en entier** lance une lecture en map-reduce : le texte est découpé en tranches de 9 k signes, chacune fait l'objet d'une fiche de dépouillement, puis toutes les fiches sont recousues en une note de lecture de réalisateur (histoire et arc, personnages et direction de jeu, lieux et lumière, séquences porteuses, difficultés de tournage). C'est cette note qui entre ensuite dans le contexte — le film travaille alors sur l'œuvre entière, pas sur son premier chapitre.
-
-Compter une requête par tranche : un scénario de long métrage fait environ 25 tranches, un roman de 400 pages environ 80. Le garde-fou est fixé à 90.
-
-### Mode Mistral gratuit
-
-Quand **Mistral est la seule clé configurée**, Vision-IA n'utilise pas l'API Batch : les documents longs sont dépouillés via `/v1/chat/completions`, une tranche après l'autre. Le mode Free démarre à **4 500 signes par tranche**. Si Mistral renvoie un `429`, Vision-IA ne rejoue plus plusieurs fois la même grosse requête : il divise automatiquement la taille de tranche par deux (jusqu'à 1 200 signes), reconstruit le reste du travail et mémorise la taille qui fonctionne pour une reprise ultérieure. Chaque fiche réussie est sauvegardée immédiatement et l'offset n'avance jamais sur une requête refusée. Un `402` reçu lors d'une tentative Batch déclenche également le repli vers Mistral temps réel.
-
-### Stockage
-
-Le localStorage plafonne vers 5 Mo : il ne garde que les métadonnées du film. Les corps de texte vont en IndexedDB, avec repli en mémoire si la base est refusée (Safari en navigation privée) — dans ce cas les pièces disparaissent à la fermeture de l'onglet, le reste du film survit.
-
-Un PDF scanné n'a pas de texte à extraire : l'app le détecte et renvoie vers « Analyser un repérage ». La lecture d'image demande la clé Mistral, seul moteur de la chaîne à voir les images. Pas de lecture EPUB pour l'instant : convertir en PDF ou en TXT.
-\n\nAvec une clé Groq configurée, le dépouillement gratuit utilise aussi **Groq GPT-OSS 20B** (`openai/gpt-oss-20b`) en secours après les modèles Mistral. Le modèle Groq historique `llama-3.3-70b-versatile` a été retiré du Free/Developer tier le 16 août 2026.\n
-## Conducteur
-
-Dès qu'un scénario est versé, la phase Conducteur se remplit sans une seule requête IA, à partir des seuls en-têtes de séquence : minutage estimé (1 500 signes ≈ 1 page ≈ 1 minute), nombre de décors distincts, répartition intérieurs/extérieurs, séquences de nuit, et surtout le **regroupement par décor** — l'ordre dans lequel tourner pour ne pas revenir deux fois au même endroit.
-
-## Storyboard
-
-Depuis le découpage, chaque plan devient une vue générée par Pollinations (gratuit, sans clé, CORS ouvert). Le prompt est construit sur l'échelle, l'angle, la focale et l'action du plan, plus la palette et le genre du film. 24 vues maximum par tirage.
-
-## Reprise et robustesse
-
-- **Reprendre un film** relit une sauvegarde JSON, corpus intégral compris — l'export n'est plus un cul-de-sac.
-- Le **dépouillement est reprenable** : chaque fiche est sauvegardée dès qu'elle arrive. Une coupure à la 62ᵉ tranche sur 80 ne perd rien, le bouton propose de reprendre là où ça s'est arrêté.
-- Cadence de 2,2 s entre les tranches pour rester sous les 30 requêtes/minute de Groq, et réessai avec attente croissante (12, 24, 36, 48 s) sur erreur de quota.
-- Note d'intention, directives et dialogue s'**écrivent en direct** (SSE lu par `XMLHttpRequest.onprogress`, conforme à la règle XHR).
-- Service worker **versionné**, `index.html` servi réseau d'abord : une mise en ligne n'est plus prisonnière du cache.
-
-## Durcissement (v1.1)
-
-- **Verrou de génération corrigé.** Le clap s'effaçait au premier mot en remettant `occupe` à faux : les boutons redevenaient actifs pendant l'écriture, et un second envoi écrasait le premier. Le clap et le verrou sont désormais deux choses distinctes — une barre « Vision-IA écrit… » remplace le clap, les boutons restent bloqués.
-- **Bouton Couper.** Toute génération est interruptible (`XMLHttpRequest.abort()`, touche Échap aussi). Le texte déjà écrit est conservé, pas jeté. Une interruption ne déclenche pas la bascule vers le fournisseur suivant.
-- **Chaîne de fournisseurs unifiée.** Les modes streaming et non-streaming parcouraient la chaîne dans deux fonctions jumelles : ce qui diverge finit par diverger en bug. Une seule fonction `chaine()` désormais.
-- **Rendu incrémental du dialogue.** Le fil entier était reconstruit à chaque token (`innerHTML` + `scrollIntoView`) — injouable sur mobile. Seul le dernier tour est mis à jour.
-- **Parseur SSE testé** sur des trames coupées en plein milieu de JSON : recollage vérifié sous node.
-- **Storyboard** : état de chargement visible et repli propre quand une vue ne revient pas.
-- **pdf.js** : garde-fou de 45 s si le worker du CDN est injoignable, au lieu d'une attente infinie.
-- **Clavier** : flèches gauche/droite entre les phases, Échap ferme les réglages puis coupe une génération, focus rendu au bouton d'origine.
-
-## Quotas et 429 (v1.2)
-
-L'offre gratuite de Mistral plafonne à une requête par seconde, Groq à trente par minute. Trois mécanismes, du plus discret au plus visible :
-
-1. **Cadence anticipée** — chaque fournisseur a son intervalle minimal (Mistral 1,4 s, Cerebras 1,2 s, Groq 2,1 s) et les appels sont espacés avant d'être émis. Le 429 est évité plutôt que rattrapé. C'est ce qui rend le dépouillement d'un roman praticable : plus de temporisation artificielle dans la boucle, la cadence est tenue au niveau du transport.
-2. **Reprise sur le même moteur** — un 429 n'est pas une panne mais une file d'attente. L'en-tête `Retry-After` est lu et respecté ; à défaut, attente de 3, 9 puis 20 s. Un 5xx suit la même règle.
-3. **Bascule intelligente** — s'il reste une clé libre derrière, une seule reprise courte (2 s) puis on passe au moteur suivant : inutile d'attendre 30 s quand Groq est disponible. C'est seulement sur le dernier moteur de la chaîne qu'on patiente pour de bon.
-
-Les messages sont explicites : « Mistral sature, reprise dans 9 s. » puis « Bascule sur Groq. » Les erreurs 401 et 403 sont nommées « Clé refusée » et ne déclenchent aucune attente — une clé invalide ne se répare pas en patientant.
-
-L'analyse de repérage, qui attaque Pixtral hors chaîne et sans repli possible, suit la même politique de reprise.
