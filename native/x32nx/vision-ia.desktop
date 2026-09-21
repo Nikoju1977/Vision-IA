@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Vision-IA
+Comment=Codec neuronal X32-NX
+Exec=vision_ia_node --port 8001
+Icon=vision-ia
+Categories=AudioVideo;Video;Graphics;3DGraphics;
+Terminal=true

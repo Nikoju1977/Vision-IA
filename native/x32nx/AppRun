@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(dirname "$(readlink -f "${0}")")"
+
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH:-}"
+
+if [[ "$#" -eq 0 ]]; then
+  exec "${HERE}/usr/bin/vision_ia_node"     --port 8001
+fi
+
+case "$1" in
+  studio)
+    shift
+    exec "${HERE}/usr/bin/vision_ia_node" "$@"
+    ;;
+  audit)
+    exec "${HERE}/usr/bin/run_fec_tests"
+    ;;
+  *)
+    if command -v python3 >/dev/null 2>&1; then
+      exec python3         "${HERE}/usr/bin/cli_router.py" "$@"
+    fi
+
+    echo "python3 requis pour cette commande AppImage." >&2
+    exit 127
+    ;;
+esac
