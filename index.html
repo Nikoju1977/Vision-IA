@@ -165,6 +165,15 @@ main{max-width:960px;margin:0 auto;padding:18px 16px 90px}
 /* ── Le découpage : tableau des plans ────────────────────── */
 .table-enveloppe{overflow-x:auto;box-shadow:var(--ombre);background:var(--page)}
 table{border-collapse:collapse;width:100%;min-width:760px;color:var(--page-encre);font-size:13.5px}
+#vue-decoupage table{table-layout:fixed;min-width:900px}
+#vue-decoupage th:nth-child(1){width:6%}
+#vue-decoupage th:nth-child(2){width:12%}
+#vue-decoupage th:nth-child(3){width:14%}
+#vue-decoupage th:nth-child(4){width:8%}
+#vue-decoupage th:nth-child(5){width:11%}
+#vue-decoupage th:nth-child(6){width:8%}
+#vue-decoupage th:nth-child(7){width:41%}
+#vue-decoupage td{overflow-wrap:anywhere}
 thead th{
   background:#e2ded2;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:.1em;
   text-align:left;padding:9px 10px;border-bottom:2px solid #1b1b18;white-space:nowrap;
@@ -267,10 +276,11 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
   *{animation-duration:.001ms !important;transition-duration:.001ms !important}
 }
 @media print{
-  .clap,.phases,.barre,.saisie,footer,.voile,.tirage{display:none !important}
+  .clap,.phases,.barre,.saisie,footer,.voile,.tirage,#service,#ecriture,.vue{display:none !important}
   body{background:#fff;color:#000}
-  .vue{display:block !important}
-  .papier{box-shadow:none;background:#fff}
+  main{max-width:none;margin:0;padding:0}
+  #vue-dossier{display:block !important}
+  .papier{box-shadow:none;background:#fff;color:#000;padding:0;font-size:11pt;line-height:1.55;overflow-wrap:anywhere}
 }
 </style>
 </head>
@@ -461,7 +471,7 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
     </div>
     <div class="cle">
       <label for="k-groq">Groq</label>
-      <small>Llama 3.3 70B — rapide, généreux en quota.</small>
+      <small>GPT-OSS 20B — secours rapide pour les documents longs.</small>
       <input id="k-groq" type="password" placeholder="gsk_…" autocomplete="off" spellcheck="false">
     </div>
     <div class="cle">
@@ -471,7 +481,7 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
     </div>
     <div class="cle">
       <label for="k-mistral">Mistral</label>
-      <small>Mistral Small — français soigné.</small>
+      <small>Mistral Small 4 — moteur principal ; Ministral 3 pour la vision.</small>
       <input id="k-mistral" type="password" placeholder="…" autocomplete="off" spellcheck="false">
     </div>
     <div class="cle">
@@ -558,6 +568,13 @@ var ACCUEIL =
 "Vision-IA au rapport. Je prends le film en charge de l'idée au mixage.\n\n" +
 "Donnez-moi le pitch, ou à défaut le genre : c'est de là que part tout le reste. Une ligne suffit pour commencer.";
 
+var DISCIPLINE_SOURCE =
+"\n\nDISCIPLINE DE SOURCE — RÈGLE PRIORITAIRE\n" +
+"Les documents du classeur sont la source factuelle du projet. Ne crée jamais un personnage, un lieu, une date, un événement, un accessoire ou une relation qui n'y figure pas comme si c'était un fait. " +
+"Distingue strictement ce qui vient des sources de ce qui est une proposition de mise en scène. " +
+"Pour un projet historique ou documentaire, toute extrapolation factuelle doit être signalée comme proposition ou comme point à vérifier. " +
+"Quand une séquence précise est fournie, elle est la seule source autorisée pour les actions, personnages, objets et lieux de cette séquence.";
+
 var PROVIDERS = {
   groq:     { nom:'Groq',     url:'https://api.groq.com/openai/v1/chat/completions', cle:'vai_k_groq',     modele:'openai/gpt-oss-20b',      cadence:2100 },
   cerebras: { nom:'Cerebras', url:'https://api.cerebras.ai/v1/chat/completions',     cle:'vai_k_cerebras', modele:'llama-3.3-70b',           cadence:1200 },
@@ -568,7 +585,7 @@ var CADENCE_ETAT = 'vai_cadence_v6';
 var PLAFOND_CLE = 'vai_plafond_jetons';
 var FENETRE_JETONS = 60000;
 var ORDRE = ['mistral','groq','cerebras'];
-var VISION = { url:'https://api.mistral.ai/v1/chat/completions', cle:'vai_k_mistral', modele:'pixtral-12b-2409' };
+var VISION = { url:'https://api.mistral.ai/v1/chat/completions', cle:'vai_k_mistral', modele:'ministral-3b-latest' };
 var STOCK = 'vai_projet_v1';
 var MAX_CORPS = 900000;  /* signes conservés par pièce — un roman entier */
 var MAX_CTX = 5000;      /* signes injectés par pièce non dépouillée */
@@ -579,7 +596,7 @@ var etat = {
   titre:'', genre:'', format:'Court métrage', decor:'Décor naturel', budget:'',
   consigne:CONSIGNE_PAR_DEFAUT,
   fil:[{ qui:'real', texte:ACCUEIL }],
-  note:'', plans:[], da:null, daTexte:'', prod:'', scene:'', pieces:[], storyboard:[]
+  note:'', plans:[], planSource:'', planSourceLabel:'', da:null, daTexte:'', prod:'', scene:'', pieces:[], storyboard:[]
 };
 var occupe = false;
 
@@ -1237,35 +1254,44 @@ function demanderFlux(messages, temperature, maxJetons, onMorceau){
   }, estimerJetons(messages, maxJetons || 2400));
 }
 
-function contexte(){
+function contexte(options){
+  options = options || {};
   var l = [];
   if(etat.titre)  l.push('Titre : ' + etat.titre);
   if(etat.genre)  l.push('Genre : ' + etat.genre);
   l.push('Format : ' + etat.format);
   l.push('Tournage : ' + etat.decor);
   if(etat.budget) l.push('Moyens : ' + etat.budget);
-  if(etat.note)   l.push('Note d\'intention déjà validée :\n' + etat.note.slice(0,1600));
+  if(etat.note && !options.sansNote) l.push('Note d\'intention déjà validée :\n' + etat.note.slice(0,1600));
   var t = 'FICHE DU PROJET\n' + l.join('\n');
 
-  if(etat.pieces && etat.pieces.length){
-    t += '\n\nPIÈCES VERSÉES AU FILM — matière de travail, à exploiter sans la paraphraser :\n';
-    for(var i=0;i<etat.pieces.length;i++){
-      var p = etat.pieces[i];
+  var pieces = etat.pieces || [];
+  if(options.sansPieces) pieces = [];
+  else if(options.pieceId){
+    pieces = pieces.filter(function(p){ return p.id === options.pieceId; });
+  }
+
+  if(pieces.length){
+    t += '\n\nPIÈCES SOURCES DU FILM — ne jamais les mélanger avec une invention :\n';
+    for(var i=0;i<pieces.length;i++){
+      var p = pieces[i];
       var tete = p.genre === 'image' ? 'REPÉRAGE' : (p.genre === 'scenario' ? 'SCÉNARIO' : (p.genre === 'livre' ? 'LIVRE' : 'DOCUMENT'));
-      t += '\n--- ' + tete + ' : ' + p.nom + ' ---\n';
+      t += '\n--- SOURCE ' + tete + ' : ' + p.nom + ' ---\n';
       if(p.genre === 'image'){
         t += String(p.texte || '') + '\n';
       } else if(p.synthese){
-        t += 'Note de lecture (document dépouillé en entier, ' + Math.round((p.signes||0)/1000) + ' k signes) :\n' + p.synthese + '\n';
+        t += 'Note de lecture issue du document dépouillé en entier (' + Math.round((p.signes||0)/1000) + ' k signes) :\n' + p.synthese + '\n';
       } else {
-        var c = corpsDe(p).texte;
-        t += c.slice(0, MAX_CTX) + (c.length > MAX_CTX ? '\n[…seul le début est lu : dépouiller la pièce pour la connaître en entier]' : '') + '\n';
+        var corps = corpsDe(p).texte;
+        t += corps.slice(0, MAX_CTX) + (corps.length > MAX_CTX ? '\n[…seul le début est lu : dépouiller la pièce pour la connaître en entier]' : '') + '\n';
       }
     }
   }
   return t;
 }
-function socle(){ return [{ role:'system', content: etat.consigne + '\n\n' + contexte() }]; }
+function socle(options){
+  return [{ role:'system', content: etat.consigne + DISCIPLINE_SOURCE + '\n\n' + contexte(options) }];
+}
 
 function extraireJson(txt){
   var t = String(txt).replace(/```json/gi,'```').split('```');
@@ -1418,6 +1444,18 @@ function decouperEnBlocs(t){
   return blocs.filter(function(b){ return b.texte.trim().length > 60; });
 }
 
+function detecterGenreDocument(t, blocs, nom){
+  var seq = 0, chap = 0;
+  for(var i=0;i<blocs.length;i++){
+    if(RX_SEQ.test(blocs[i].entete)) seq++;
+    else if(RX_CHAP.test(blocs[i].entete)) chap++;
+  }
+  if(/\.(fountain|fdx)$/i.test(String(nom || ''))) return 'scenario';
+  if(seq >= 2 || (seq === 1 && t.length < 50000)) return 'scenario';
+  if(chap >= 2) return 'livre';
+  return 'texte';
+}
+
 function tranches(t, taille){
   var out = [], i = 0;
   while(i < t.length){
@@ -1469,12 +1507,13 @@ function verserDocument(f){
   lecture.then(function(t){
     if(t.length > MAX_CORPS) t = t.slice(0, MAX_CORPS) + '\n\n[…texte arrêté à ' + Math.round(MAX_CORPS/1000) + ' k caractères]';
     var blocs = decouperEnBlocs(t);
-    var scenario = blocs.length >= 4 && RX_SEQ.test(blocs[0].entete);
+    var genreDoc = detecterGenreDocument(t, blocs, f.name);
+    var scenario = genreDoc === 'scenario';
     var id = 'p' + Date.now() + Math.floor(Math.random()*1000);
 
     corpus[id] = { texte: t, blocs: blocs };
     etat.pieces.push({
-      id: id, genre: scenario ? 'scenario' : (blocs.length >= 3 ? 'livre' : 'texte'),
+      id: id, genre: genreDoc,
       nom: f.name, poids: f.size, signes: t.length, nbBlocs: blocs.length,
       apercu: t.slice(0, 400), synthese: '', quand: Date.now()
     });
@@ -2060,11 +2099,11 @@ function reduireImage(dataUrl, cote){
 
 function verserImage(f){
   if(!f) return;
-  var kMistral = sanitizeKey(safeStorage.getItem(VISION.cle) || '');
+  var kMistral = sanitizeKey(trousseau.lire('mistral') || '');
   if(!kMistral){ service('Le repérage se lit avec Mistral : ajoutez cette clé dans les Réglages.', true); return; }
 
   moteur(true, 'Lecture du repérage', f.name);
-  var pixtral = { url: VISION.url, cadence: 1400, nom: 'Pixtral' };
+  var pixtral = { url: VISION.url, cadence: 1400, nom: 'Ministral Vision' };
   lireDataUrl(f).then(function(brut){
     return reduireImage(brut, 1280).then(function(grand){
       return reduireImage(brut, 160).then(function(vignette){
