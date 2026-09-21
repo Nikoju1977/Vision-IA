@@ -34,48 +34,48 @@ jobs:
       - name: JavaScript syntax
         run: node --check /tmp/vision-ia-inline.js
 
-      - name: Mistral throttle regression guards
+      - name: Vision-IA regression guards
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
           html = Path("index.html").read_text(encoding="utf-8")
 
+          # Cadence, reprise et persistance.
           assert "vai_cadence_v6" in html
           assert "pi.cadence = Math.max(0, p.cadence || 0);" in html
-          assert "Math.min(18000, cible)" in html
           assert "depouillementOffset" in html
           assert "corrigerReservation(ticket, reel)" in html
-
-          # Batch requests must carry the model in each body.
-          assert "model: PROVIDERS.mistral.modele" in html
-          assert "requests: requests" in html
-
-          # Mistral-only configuration must use the free realtime path, not Batch.
-          assert "function modeMistralGratuit()" in html
-          assert "function modeDepouillementGratuit()" in html
-          assert "Mode Mistral gratuit" in html
-          assert "e && e.code === 402" in html
-          assert "poursuite en Mistral gratuit" in html
-
-          # Free mode starts small and adapts on a 429.
-          assert "if(modeDepouillementGratuit()) return 3000;" in html
+          assert "function strategieDepouillement(" in html
+          assert "if(strategie === 'groq' || strategie === 'secours') return 9000;" in html
+          assert "Document long — Groq prend directement le dépouillement" in html
           assert "function demanderMistralGratuit(" in html
           assert "MIN_TRANCHE_FREE = 900" in html
-          assert "lots.slice(pos).join('')" in html
           assert "p.tailleTrancheMistral = nouvelleTaille" in html
+          assert "function demanderDepouillementSansMistral" in html
+
+          # Modèles actuels et coffre à clés.
           assert "ministral-3b-latest" in html
           assert "openai/gpt-oss-20b" in html
           assert "Groq GPT-OSS 20B" in html
-          assert "function detailErreurApi(" in html
-          assert "Quota Mistral Free atteint sur Ministral 3B et Mistral Small" in html
+          assert "pixtral-12b-2409" not in html
+          assert "safeStorage.getItem(VISION.cle)" not in html
+          assert "trousseau.lire('mistral')" in html
 
-          # Other Batch failures can still use configured non-Mistral fallbacks.
-          assert "demanderDepouillementSansMistral" in html
+          # Source de vérité et isolation du découpage.
+          assert "DISCIPLINE DE SOURCE" in html
+          assert "SOURCE UNIQUE DE LA SÉQUENCE" in html
+          assert "planSource" in html
+          assert "Source verrouillée" in html
+          assert "if(p.genre !== 'scenario') continue;" in html
 
-          # Regression guard: old fixed 90-second retry arrays/messages are forbidden.
+          # L'export imprimé ne doit plus capturer les toasts / écrans de travail.
+          assert "#service,#ecriture,.vue" in html
+          assert "#vue-dossier{display:block !important}" in html
+
+          # Régressions historiques interdites.
           assert "[60, 90, 90, 90, 90, 90]" not in html
           assert "reprise dans 90 s" not in html
 
-          print("Mistral Free/Batch/throttle regression guards: OK")
+          print("Vision-IA regression guards: OK")
           PY
