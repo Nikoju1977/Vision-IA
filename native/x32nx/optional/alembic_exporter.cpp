@@ -91,10 +91,10 @@ void VisionAlembicExporter::write_frame(
         );
     }
 
-    OPointsSchema::Sample sample(
+    OPointsSchema::Sample sample{
         P3fArraySample(positions),
         UInt64ArraySample(ids)
-    );
+    };
 
     impl_->points->getSchema().set(sample);
     ++impl_->frame_count;
