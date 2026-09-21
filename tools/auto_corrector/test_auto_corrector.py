@@ -2,8 +2,8 @@ import json
 import unittest
 
 from auto_corrector import auto_correct, extract_code, run_generated_code
+from mistral_provider import MistralProvider, create_mistral_agent
 from vision_ia_agent import VisionIAAgent
-from openai_provider import OpenAIProvider, VISION_IA_RESPONSE_SCHEMA, create_openai_agent
 
 
 class AutoCorrectorTests(unittest.TestCase):
@@ -108,85 +108,94 @@ class VisionIAAgentTests(unittest.TestCase):
             }))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-class OpenAIProviderTests(unittest.TestCase):
-    def test_structured_outputs_request(self):
-        class FakeResponse:
-            output_text = json.dumps({
+class MistralProviderTests(unittest.TestCase):
+    def test_json_mode_request(self):
+        class FakeMessage:
+            content = json.dumps({
                 "analyse": "Diagnostic bref.",
                 "code": "print(7)",
             })
 
-        class FakeResponses:
+        class FakeChoice:
+            message = FakeMessage()
+
+        class FakeResponse:
+            choices = [FakeChoice()]
+
+        class FakeChat:
             def __init__(self):
                 self.kwargs = None
 
-            def create(self, **kwargs):
+            def complete(self, **kwargs):
                 self.kwargs = kwargs
                 return FakeResponse()
 
         class FakeClient:
             def __init__(self):
-                self.responses = FakeResponses()
+                self.chat = FakeChat()
 
         client = FakeClient()
-        provider = OpenAIProvider(model="gpt-test", client=client)
+        provider = MistralProvider(
+            model="mistral-test",
+            client=client,
+            temperature=0.2,
+        )
         raw = provider("SYSTEM", "PROMPT")
 
         self.assertEqual(json.loads(raw)["code"], "print(7)")
-        self.assertEqual(client.responses.kwargs["model"], "gpt-test")
-        self.assertEqual(client.responses.kwargs["instructions"], "SYSTEM")
-        self.assertEqual(client.responses.kwargs["input"], "PROMPT")
-
-        fmt = client.responses.kwargs["text"]["format"]
-        self.assertEqual(fmt["type"], "json_schema")
-        self.assertTrue(fmt["strict"])
-        self.assertFalse(fmt["schema"]["additionalProperties"])
-        self.assertEqual(set(fmt["schema"]["required"]), {"analyse", "code"})
+        self.assertEqual(client.chat.kwargs["model"], "mistral-test")
+        self.assertEqual(
+            client.chat.kwargs["response_format"],
+            {"type": "json_object"},
+        )
+        self.assertEqual(client.chat.kwargs["temperature"], 0.2)
+        self.assertEqual(
+            client.chat.kwargs["messages"],
+            [
+                {"role": "system", "content": "SYSTEM"},
+                {"role": "user", "content": "PROMPT"},
+            ],
+        )
 
     def test_factory_builds_agent_without_network(self):
-        class FakeResponse:
-            output_text = json.dumps({
+        class FakeMessage:
+            content = json.dumps({
                 "analyse": "OK.",
                 "code": "print(9)",
             })
 
-        class FakeResponses:
-            def create(self, **_kwargs):
+        class FakeChoice:
+            message = FakeMessage()
+
+        class FakeResponse:
+            choices = [FakeChoice()]
+
+        class FakeChat:
+            def complete(self, **_kwargs):
                 return FakeResponse()
 
         class FakeClient:
-            responses = FakeResponses()
+            chat = FakeChat()
 
-        agent = create_openai_agent(
-            model="gpt-test",
+        agent = create_mistral_agent(
+            model="mistral-test",
             max_iterations=2,
             timeout_sec=2,
             client=FakeClient(),
         )
+
         result = agent.solve("Afficher 9")
         self.assertTrue(result.success)
         self.assertIn("print(9)", result.code or "")
 
-    def test_schema_is_strict(self):
-        self.assertEqual(
-            VISION_IA_RESPONSE_SCHEMA,
-            {
-                "type": "object",
-                "properties": {
-                    "analyse": {
-                        "type": "string",
-                        "description": "Diagnostic bref de la solution ou de l'erreur identifiée, sans chaîne de raisonnement détaillée.",
-                    },
-                    "code": {
-                        "type": "string",
-                        "description": "Programme Python complet, sans balises Markdown.",
-                    },
-                },
-                "required": ["analyse", "code"],
-                "additionalProperties": False,
-            },
-        )
+    def test_rejects_invalid_temperature(self):
+        with self.assertRaises(ValueError):
+            MistralProvider(
+                model="mistral-test",
+                client=object(),
+                temperature=2.0,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
