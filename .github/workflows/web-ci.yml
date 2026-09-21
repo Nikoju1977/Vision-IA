@@ -41,7 +41,7 @@ jobs:
 
           html = Path("index.html").read_text(encoding="utf-8")
 
-          assert "vai_cadence_v4" in html
+          assert "vai_cadence_v5" in html
           assert "pi.cadence = Math.max(0, p.cadence || 0);" in html
           assert "Math.min(18000, cible)" in html
           assert "depouillementOffset" in html
@@ -58,11 +58,14 @@ jobs:
           assert "poursuite en Mistral gratuit" in html
 
           # Free mode starts small and adapts on a 429.
-          assert "if(modeMistralGratuit()) return 4500;" in html
+          assert "if(modeMistralGratuit()) return 3000;" in html
           assert "function demanderMistralGratuit(" in html
-          assert "MIN_TRANCHE_FREE = 1200" in html
+          assert "MIN_TRANCHE_FREE = 900" in html
           assert "lots.slice(pos).join('')" in html
           assert "p.tailleTrancheMistral = nouvelleTaille" in html
+          assert "ministral-3b-latest" in html
+          assert "function detailErreurApi(" in html
+          assert "Quota Mistral Free atteint sur Ministral 3B et Mistral Small" in html
 
           # Other Batch failures can still use configured non-Mistral fallbacks.
           assert "demanderDepouillementSansMistral" in html
