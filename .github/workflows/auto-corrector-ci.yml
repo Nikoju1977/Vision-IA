@@ -15,11 +15,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: Syntax
-        run: python -m py_compile tools/auto_corrector/auto_corrector.py
+        run: |
+          python -m py_compile tools/auto_corrector/auto_corrector.py
+          python -m py_compile tools/auto_corrector/vision_ia_agent.py
+          python -m py_compile tools/auto_corrector/mistral_provider.py
+          python -m py_compile tools/auto_corrector/test_auto_corrector.py
+
       - name: Unit tests
         working-directory: tools/auto_corrector
         run: python -m unittest -v
