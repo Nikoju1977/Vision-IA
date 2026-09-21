@@ -165,6 +165,15 @@ main{max-width:960px;margin:0 auto;padding:18px 16px 90px}
 /* ── Le découpage : tableau des plans ────────────────────── */
 .table-enveloppe{overflow-x:auto;box-shadow:var(--ombre);background:var(--page)}
 table{border-collapse:collapse;width:100%;min-width:760px;color:var(--page-encre);font-size:13.5px}
+#vue-decoupage table{table-layout:fixed;min-width:900px}
+#vue-decoupage th:nth-child(1){width:6%}
+#vue-decoupage th:nth-child(2){width:12%}
+#vue-decoupage th:nth-child(3){width:14%}
+#vue-decoupage th:nth-child(4){width:8%}
+#vue-decoupage th:nth-child(5){width:11%}
+#vue-decoupage th:nth-child(6){width:8%}
+#vue-decoupage th:nth-child(7){width:41%}
+#vue-decoupage td{overflow-wrap:anywhere}
 thead th{
   background:#e2ded2;font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:.1em;
   text-align:left;padding:9px 10px;border-bottom:2px solid #1b1b18;white-space:nowrap;
@@ -267,10 +276,11 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
   *{animation-duration:.001ms !important;transition-duration:.001ms !important}
 }
 @media print{
-  .clap,.phases,.barre,.saisie,footer,.voile,.tirage{display:none !important}
+  .clap,.phases,.barre,.saisie,footer,.voile,.tirage,#service,#ecriture,.vue{display:none !important}
   body{background:#fff;color:#000}
-  .vue{display:block !important}
-  .papier{box-shadow:none;background:#fff}
+  main{max-width:none;margin:0;padding:0}
+  #vue-dossier{display:block !important}
+  .papier{box-shadow:none;background:#fff;color:#000;padding:0;font-size:11pt;line-height:1.55;overflow-wrap:anywhere}
 }
 </style>
 </head>
@@ -461,7 +471,7 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
     </div>
     <div class="cle">
       <label for="k-groq">Groq</label>
-      <small>Llama 3.3 70B — rapide, généreux en quota.</small>
+      <small>GPT-OSS 20B — secours rapide pour les documents longs.</small>
       <input id="k-groq" type="password" placeholder="gsk_…" autocomplete="off" spellcheck="false">
     </div>
     <div class="cle">
@@ -471,7 +481,7 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
     </div>
     <div class="cle">
       <label for="k-mistral">Mistral</label>
-      <small>Mistral Small — français soigné.</small>
+      <small>Mistral Small 4 — moteur principal ; Ministral 3 pour la vision.</small>
       <input id="k-mistral" type="password" placeholder="…" autocomplete="off" spellcheck="false">
     </div>
     <div class="cle">
@@ -558,6 +568,13 @@ var ACCUEIL =
 "Vision-IA au rapport. Je prends le film en charge de l'idée au mixage.\n\n" +
 "Donnez-moi le pitch, ou à défaut le genre : c'est de là que part tout le reste. Une ligne suffit pour commencer.";
 
+var DISCIPLINE_SOURCE =
+"\n\nDISCIPLINE DE SOURCE — RÈGLE PRIORITAIRE\n" +
+"Les documents du classeur sont la source factuelle du projet. Ne crée jamais un personnage, un lieu, une date, un événement, un accessoire ou une relation qui n'y figure pas comme si c'était un fait. " +
+"Distingue strictement ce qui vient des sources de ce qui est une proposition de mise en scène. " +
+"Pour un projet historique ou documentaire, toute extrapolation factuelle doit être signalée comme proposition ou comme point à vérifier. " +
+"Quand une séquence précise est fournie, elle est la seule source autorisée pour les actions, personnages, objets et lieux de cette séquence.";
+
 var PROVIDERS = {
   groq:     { nom:'Groq',     url:'https://api.groq.com/openai/v1/chat/completions', cle:'vai_k_groq',     modele:'openai/gpt-oss-20b',      cadence:2100 },
   cerebras: { nom:'Cerebras', url:'https://api.cerebras.ai/v1/chat/completions',     cle:'vai_k_cerebras', modele:'llama-3.3-70b',           cadence:1200 },
@@ -568,7 +585,7 @@ var CADENCE_ETAT = 'vai_cadence_v6';
 var PLAFOND_CLE = 'vai_plafond_jetons';
 var FENETRE_JETONS = 60000;
 var ORDRE = ['mistral','groq','cerebras'];
-var VISION = { url:'https://api.mistral.ai/v1/chat/completions', cle:'vai_k_mistral', modele:'pixtral-12b-2409' };
+var VISION = { url:'https://api.mistral.ai/v1/chat/completions', cle:'vai_k_mistral', modele:'ministral-3b-latest' };
 var STOCK = 'vai_projet_v1';
 var MAX_CORPS = 900000;  /* signes conservés par pièce — un roman entier */
 var MAX_CTX = 5000;      /* signes injectés par pièce non dépouillée */
@@ -579,7 +596,7 @@ var etat = {
   titre:'', genre:'', format:'Court métrage', decor:'Décor naturel', budget:'',
   consigne:CONSIGNE_PAR_DEFAUT,
   fil:[{ qui:'real', texte:ACCUEIL }],
-  note:'', plans:[], da:null, daTexte:'', prod:'', scene:'', pieces:[], storyboard:[]
+  note:'', plans:[], planSource:'', planSourceLabel:'', da:null, daTexte:'', prod:'', scene:'', pieces:[], storyboard:[]
 };
 var occupe = false;
 
@@ -1079,14 +1096,27 @@ function demanderMistralGratuit(messages, temperature, maxJetons){
 
   var kg = sanitizeKey(trousseau.lire('groq'));
   if(kg){
-    candidats.push({
+    /* Groq passe avant le second modèle Mistral lorsqu'il est disponible :
+       deux modèles Mistral partagent souvent le même quota de compte. */
+    var groqCandidat = {
       id:'groq',
       nom:'Groq GPT-OSS 20B',
       modele:'openai/gpt-oss-20b',
       p:PROVIDERS.groq,
       k:kg
-    });
+    };
+    var insertion = km ? 1 : 0;
+    candidats.splice(insertion, 0, groqCandidat);
   }
+
+  /* Un fournisseur refroidi après un 429 va en fin de liste. Cela évite
+     d'attendre son Retry-After alors qu'un autre moteur est immédiatement prêt. */
+  var cadence = cadenceLire();
+  candidats.sort(function(a,b){
+    var aa = (piste(cadence, a.p.url).bloque || 0) > Date.now() ? 1 : 0;
+    var bb = (piste(cadence, b.p.url).bloque || 0) > Date.now() ? 1 : 0;
+    return aa - bb;
+  });
 
   if(!candidats.length){
     return Promise.reject(new Error(
@@ -1142,14 +1172,17 @@ function demanderMistralGratuit(messages, temperature, maxJetons){
         if(e && e.coupe) throw e;
         dernier = e;
 
+        if(e && (e.code === 429 || e.code >= 500)){
+          penaliser(c.p, e.attendre || (e.code === 429 ? 12 : 5));
+        }
+
         if(indice + 1 < candidats.length){
           var suivant = candidats[indice + 1];
-          service(c.nom + ' indisponible — bascule sur ' + suivant.nom + '.');
+          service(c.nom + ' indisponible — bascule immédiate sur ' + suivant.nom + '.');
           indice++;
           return essai();
         }
 
-        if(e && e.code === 429) penaliser(c.p, e.attendre || 12);
         throw e;
       });
     });
@@ -1237,35 +1270,44 @@ function demanderFlux(messages, temperature, maxJetons, onMorceau){
   }, estimerJetons(messages, maxJetons || 2400));
 }
 
-function contexte(){
+function contexte(options){
+  options = options || {};
   var l = [];
   if(etat.titre)  l.push('Titre : ' + etat.titre);
   if(etat.genre)  l.push('Genre : ' + etat.genre);
   l.push('Format : ' + etat.format);
   l.push('Tournage : ' + etat.decor);
   if(etat.budget) l.push('Moyens : ' + etat.budget);
-  if(etat.note)   l.push('Note d\'intention déjà validée :\n' + etat.note.slice(0,1600));
+  if(etat.note && !options.sansNote) l.push('Note d\'intention déjà validée :\n' + etat.note.slice(0,1600));
   var t = 'FICHE DU PROJET\n' + l.join('\n');
 
-  if(etat.pieces && etat.pieces.length){
-    t += '\n\nPIÈCES VERSÉES AU FILM — matière de travail, à exploiter sans la paraphraser :\n';
-    for(var i=0;i<etat.pieces.length;i++){
-      var p = etat.pieces[i];
+  var pieces = etat.pieces || [];
+  if(options.sansPieces) pieces = [];
+  else if(options.pieceId){
+    pieces = pieces.filter(function(p){ return p.id === options.pieceId; });
+  }
+
+  if(pieces.length){
+    t += '\n\nPIÈCES SOURCES DU FILM — ne jamais les mélanger avec une invention :\n';
+    for(var i=0;i<pieces.length;i++){
+      var p = pieces[i];
       var tete = p.genre === 'image' ? 'REPÉRAGE' : (p.genre === 'scenario' ? 'SCÉNARIO' : (p.genre === 'livre' ? 'LIVRE' : 'DOCUMENT'));
-      t += '\n--- ' + tete + ' : ' + p.nom + ' ---\n';
+      t += '\n--- SOURCE ' + tete + ' : ' + p.nom + ' ---\n';
       if(p.genre === 'image'){
         t += String(p.texte || '') + '\n';
       } else if(p.synthese){
-        t += 'Note de lecture (document dépouillé en entier, ' + Math.round((p.signes||0)/1000) + ' k signes) :\n' + p.synthese + '\n';
+        t += 'Note de lecture issue du document dépouillé en entier (' + Math.round((p.signes||0)/1000) + ' k signes) :\n' + p.synthese + '\n';
       } else {
-        var c = corpsDe(p).texte;
-        t += c.slice(0, MAX_CTX) + (c.length > MAX_CTX ? '\n[…seul le début est lu : dépouiller la pièce pour la connaître en entier]' : '') + '\n';
+        var corps = corpsDe(p).texte;
+        t += corps.slice(0, MAX_CTX) + (corps.length > MAX_CTX ? '\n[…seul le début est lu : dépouiller la pièce pour la connaître en entier]' : '') + '\n';
       }
     }
   }
   return t;
 }
-function socle(){ return [{ role:'system', content: etat.consigne + '\n\n' + contexte() }]; }
+function socle(options){
+  return [{ role:'system', content: etat.consigne + DISCIPLINE_SOURCE + '\n\n' + contexte(options) }];
+}
 
 function extraireJson(txt){
   var t = String(txt).replace(/```json/gi,'```').split('```');
@@ -1418,6 +1460,18 @@ function decouperEnBlocs(t){
   return blocs.filter(function(b){ return b.texte.trim().length > 60; });
 }
 
+function detecterGenreDocument(t, blocs, nom){
+  var seq = 0, chap = 0;
+  for(var i=0;i<blocs.length;i++){
+    if(RX_SEQ.test(blocs[i].entete)) seq++;
+    else if(RX_CHAP.test(blocs[i].entete)) chap++;
+  }
+  if(/\.(fountain|fdx)$/i.test(String(nom || ''))) return 'scenario';
+  if(seq >= 2 || (seq === 1 && t.length < 50000)) return 'scenario';
+  if(chap >= 2) return 'livre';
+  return 'texte';
+}
+
 function tranches(t, taille){
   var out = [], i = 0;
   while(i < t.length){
@@ -1432,10 +1486,21 @@ function tranches(t, taille){
   return out;
 }
 
-function tailleTrancheDepouillement(){
-  /* Le dépouillement gratuit privilégie de petites tranches, compatibles avec
-     les plafonds TPM de Mistral et Groq. */
-  if(modeDepouillementGratuit()) return 3000;
+function strategieDepouillement(p, restant){
+  var mistral = !!sanitizeKey(trousseau.lire('mistral'));
+  var groq = !!sanitizeKey(trousseau.lire('groq'));
+  var cerebras = !!sanitizeKey(trousseau.lire('cerebras'));
+  if(groq && (restant > 60000 || p.fournisseurDepouillement === 'groq')) return 'groq';
+  if(mistral) return 'hybride';
+  if(groq || cerebras) return 'secours';
+  return 'aucun';
+}
+
+function tailleTrancheDepouillement(strategie){
+  /* Des tranches plus longues avec Groq réduisent fortement le nombre
+     de requêtes sur les scénarios et romans volumineux. */
+  if(strategie === 'groq' || strategie === 'secours') return 9000;
+  if(strategie === 'hybride') return 3000;
 
   var plafond = plafondJetons();
   if(!(plafond > 0)) return 18000;
@@ -1469,12 +1534,13 @@ function verserDocument(f){
   lecture.then(function(t){
     if(t.length > MAX_CORPS) t = t.slice(0, MAX_CORPS) + '\n\n[…texte arrêté à ' + Math.round(MAX_CORPS/1000) + ' k caractères]';
     var blocs = decouperEnBlocs(t);
-    var scenario = blocs.length >= 4 && RX_SEQ.test(blocs[0].entete);
+    var genreDoc = detecterGenreDocument(t, blocs, f.name);
+    var scenario = genreDoc === 'scenario';
     var id = 'p' + Date.now() + Math.floor(Math.random()*1000);
 
     corpus[id] = { texte: t, blocs: blocs };
     etat.pieces.push({
-      id: id, genre: scenario ? 'scenario' : (blocs.length >= 3 ? 'livre' : 'texte'),
+      id: id, genre: genreDoc,
       nom: f.name, poids: f.size, signes: t.length, nbBlocs: blocs.length,
       apercu: t.slice(0, 400), synthese: '', quand: Date.now()
     });
@@ -1577,8 +1643,8 @@ function creerBatchDepouillement(p, lots, baseFiches, baseOffset, total, genre, 
   if(!cle) return Promise.reject(new Error('Clé Mistral absente.'));
 
   var quoi = genre === 'scenario'
-    ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
-    : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
+    ? 'Dépouille fidèlement cette portion de scénario : personnages réellement présents, actions effectivement écrites, enjeu dramatique explicite, décors et contraintes de tournage observables. N\'invente aucun fait, personnage, lieu, date, objet ni causalité. Si une information manque, écris « non précisé ». 120 mots maximum, texte suivi, aucune formule d\'introduction.'
+    : 'Dépouille fidèlement cette portion de texte : personnages réellement nommés, faits écrits, lieux explicitement présents et images fortes réellement décrites. N\'invente aucun fait, personnage, lieu, date, objet ni causalité. Si une information manque, écris « non précisé ». 120 mots maximum, texte suivi, aucune formule d\'introduction.';
 
   var requests = lots.map(function(portion, i){
     var numero = baseFiches + i + 1;
@@ -1589,7 +1655,7 @@ function creerBatchDepouillement(p, lots, baseFiches, baseOffset, total, genre, 
         max_tokens: 500,
         temperature: 0.4,
         messages: [
-          { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
+          { role:'system', content:'Tu es Vision-IA en mode script analyste. La portion fournie est ta seule source factuelle. Résume-la fidèlement sans rien ajouter ; toute incertitude doit rester explicite.' },
           { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
         ]
       }
@@ -1738,14 +1804,12 @@ function demanderDepouillementSansMistral(messages, temperature, maxJetons){
   var generation = generationCoupe;
   var dispo = clesTempsReelSansMistral();
   if(!dispo.length){
-    return Promise.reject(new Error(
-      'Batch Mistral indisponible et aucun moteur de secours (Groq/Cerebras) n\'est configuré. ' +
-      'Vision-IA ne relancera pas Mistral temps réel pour éviter une nouvelle attente de 90 s.'
-    ));
+    return Promise.reject(new Error('Aucun moteur de secours Groq/Cerebras n\'est configuré.'));
   }
 
   var i = 0;
   var dernier = null;
+  var reprises = 0;
   var estimation = estimerJetons(messages, maxJetons || 500);
 
   function essai(){
@@ -1774,7 +1838,8 @@ function demanderDepouillementSansMistral(messages, temperature, maxJetons){
           : '';
         if(!t) throw new Error('Réponse vide.');
         apaiser(p);
-        return { texte:t, moteur:p.nom };
+        reprises = 0;
+        return { texte:t, moteur:p.nom, fournisseur:dispo[i].id, modele:p.modele };
       }).catch(function(e){
         libererReservation(ticket);
         throw e;
@@ -1782,11 +1847,23 @@ function demanderDepouillementSansMistral(messages, temperature, maxJetons){
     }).catch(function(e){
       if(e && e.coupe) throw e;
       dernier = e;
-      i++;
-      if(i < dispo.length){
+      var saturable = e && (e.code === 429 || e.code >= 500);
+
+      if(saturable && i + 1 < dispo.length){
+        penaliser(p, e.attendre || 5);
+        i++;
+        reprises = 0;
         service('Secours immédiat : ' + PROVIDERS[dispo[i].id].nom + '.');
         return essai();
       }
+
+      if(saturable && reprises < 4){
+        var s = penaliser(p, e.attendre || (e.code === 429 ? 12 : 5));
+        reprises++;
+        service(p.nom + ' limité — reprise automatique dans ' + Math.ceil(s) + ' s (' + reprises + '/4).');
+        return essai();
+      }
+
       throw e;
     });
   }
@@ -1809,12 +1886,12 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
     $('ecriture-quoi').textContent = 'Dépouillement : ' + numero + '/' + total;
 
     var quoi = genre === 'scenario'
-      ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
-      : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
+      ? 'Dépouille fidèlement cette portion de scénario : personnages réellement présents, actions effectivement écrites, enjeu dramatique explicite, décors et contraintes de tournage observables. N\'invente aucun fait, personnage, lieu, date, objet ni causalité. Si une information manque, écris « non précisé ». 120 mots maximum, texte suivi, aucune formule d\'introduction.'
+      : 'Dépouille fidèlement cette portion de texte : personnages réellement nommés, faits écrits, lieux explicitement présents et images fortes réellement décrites. N\'invente aucun fait, personnage, lieu, date, objet ni causalité. Si une information manque, écris « non précisé ». 120 mots maximum, texte suivi, aucune formule d\'introduction.';
 
     var portion = lots[pos];
     var messages = [
-      { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
+      { role:'system', content:'Tu es Vision-IA en mode script analyste. La portion fournie est ta seule source factuelle. Résume-la fidèlement sans rien ajouter ; toute incertitude doit rester explicite.' },
       { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
     ];
 
@@ -1892,10 +1969,11 @@ function depouiller(i){
 
   p.depouillementOffset = Math.max(0, Math.min(c.texte.length, p.depouillementOffset));
 
-  var taille = modeDepouillementGratuit() && p.tailleTrancheMistral
-    ? Math.max(900, Math.min(3000, Number(p.tailleTrancheMistral) || 3000))
-    : tailleTrancheDepouillement();
   var reste = c.texte.slice(p.depouillementOffset);
+  var strategie = strategieDepouillement(p, reste.length);
+  var taille = strategie === 'hybride' && p.tailleTrancheMistral
+    ? Math.max(900, Math.min(3000, Number(p.tailleTrancheMistral) || 3000))
+    : tailleTrancheDepouillement(strategie);
   var lots = tranches(reste, taille);
 
   if(!lots.length && !p.fiches.length){ service('Rien à dépouiller.'); return; }
@@ -1919,8 +1997,13 @@ function depouiller(i){
   if(p.batchMistral && p.batchMistral.id){
     service('Reprise du Batch Mistral déjà lancé.');
     travail = attendreBatchDepouillement(p, generation);
-  } else if(modeDepouillementGratuit()){
-    service('Mode gratuit — Mistral puis Groq si une clé Groq est configurée.');
+  } else if(strategie === 'groq' || strategie === 'secours'){
+    service(strategie === 'groq'
+      ? 'Document long — Groq prend directement le dépouillement pour réduire le nombre de requêtes.'
+      : 'Dépouillement sur moteur de secours Groq/Cerebras.');
+    travail = depouillerTempsReel(p, lots, n, total, p.genre, generation, true);
+  } else if(strategie === 'hybride'){
+    service('Mode économique — Mistral puis bascule Groq immédiate si nécessaire.');
     travail = depouillerTempsReel(p, lots, n, total, p.genre, generation);
   } else if(batchMistralDisponible() && lots.length >= 3){
     service('Document long : dépouillement envoyé en Batch Mistral.');
@@ -1978,12 +2061,16 @@ function depouiller(i){
     $('tirage-titre').textContent = 'Synthèse';
     $('tirage-detail').textContent = p.fiches.length + ' tranches à recoudre';
     return demanderPourDepouillement([
-      { role:'system', content: etat.consigne },
+      { role:'system', content:
+        'Tu es Vision-IA en mode script analyste. Les fiches fournies sont ta seule source factuelle. ' +
+        'N\'ajoute aucun personnage, événement, lieu, date, lien causal ou contexte historique absent. ' +
+        'Sépare les faits du texte des propositions de réalisation ; si une donnée est incertaine, écris « à vérifier ».'
+      },
       { role:'user', content:
         'Voici mes fiches de dépouillement de « ' + p.nom +' », dans l\'ordre. ' +
         'Reconstitue une note de lecture de réalisateur, 400 à 600 mots en texte suivi : ' +
-        'l\'histoire et son arc, les personnages et ce que je demanderai au jeu, les lieux et leur lumière, ' +
-        'les séquences qui portent le film, et ce qui sera difficile à tourner. Pas de question à la fin.\n\n' +
+        'l\'histoire et son arc tels qu\'ils sont réellement établis, les personnages et les indications de jeu déductibles, les lieux et leur lumière décrite, ' +
+        'les séquences qui portent le film et les contraintes de tournage observables. Ne transforme jamais une proposition artistique en fait. Pas de question à la fin.\n\n' +
         fiches.join('\n\n') }
     ], 0.6, 1800);
   }).then(function(r){
@@ -2060,11 +2147,11 @@ function reduireImage(dataUrl, cote){
 
 function verserImage(f){
   if(!f) return;
-  var kMistral = sanitizeKey(safeStorage.getItem(VISION.cle) || '');
+  var kMistral = sanitizeKey(trousseau.lire('mistral') || '');
   if(!kMistral){ service('Le repérage se lit avec Mistral : ajoutez cette clé dans les Réglages.', true); return; }
 
   moteur(true, 'Lecture du repérage', f.name);
-  var pixtral = { url: VISION.url, cadence: 1400, nom: 'Pixtral' };
+  var pixtral = { url: VISION.url, cadence: 1400, nom: 'Ministral Vision' };
   lireDataUrl(f).then(function(brut){
     return reduireImage(brut, 1280).then(function(grand){
       return reduireImage(brut, 160).then(function(vignette){
@@ -2140,7 +2227,7 @@ function majSequences(){
   var s = $('f-sequence'), h = '<option value="">Séquence à découper — saisie libre</option>';
   for(var i=0;i<etat.pieces.length;i++){
     var p = etat.pieces[i];
-    if(p.genre === 'image') continue;
+    if(p.genre !== 'scenario') continue;
     var b = corpsDe(p).blocs || [];
     if(!b.length) continue;
     h += '<optgroup label="' + esc(p.nom) + '">';
@@ -2313,6 +2400,8 @@ function charger(){
     Object.keys(o).forEach(function(c){ if(o[c] != null) etat[c] = o[c]; });
     if(!etat.consigne) etat.consigne = CONSIGNE_PAR_DEFAUT;
     if(!Array.isArray(etat.pieces)) etat.pieces = [];
+    if(typeof etat.planSource !== 'string') etat.planSource = '';
+    if(typeof etat.planSourceLabel !== 'string') etat.planSourceLabel = '';
     if(!etat.fil || !etat.fil.length) etat.fil = [{ qui:'real', texte:ACCUEIL }];
   } catch(e){}
 }
@@ -2380,6 +2469,7 @@ function rendreDossier(){
 }
 
 function rendreTout(){
+  adopterTitreDepuisNote();
   $('f-titre').value  = etat.titre;
   $('f-genre').value  = etat.genre;
   $('f-format').value = etat.format;
@@ -2416,6 +2506,7 @@ function dossierMarkdown(){
   if(etat.plans.length){
     l.push('## Découpage technique','');
     if(etat.scene) l.push('_' + etat.scene + '_','');
+    if(etat.planSourceLabel) l.push('_Source verrouillée : ' + String(etat.planSourceLabel).replace(/\|/g,'/') + '_','');
     l.push('| Plan | Échelle | Mouvement | Focale | Angle | Durée | Action et intention |');
     l.push('|---|---|---|---|---|---|---|');
     for(var i=0;i<etat.plans.length;i++){
@@ -2425,6 +2516,29 @@ function dossierMarkdown(){
     }
     l.push('');
   }
+  var seqs = sequencesDuFilm();
+  if(seqs.length){
+    l.push('## Conducteur','');
+    l.push('| Séq. | En-tête | Décor | I/E | Moment | ≈ durée |');
+    l.push('|---:|---|---|---|---|---:|');
+    var groupes = {};
+    for(var s=0;s<seqs.length;s++){
+      var q = seqs[s];
+      l.push('| ' + q.num + ' | ' + String(q.entete).replace(/\|/g,'/') + ' | ' +
+        String(q.decor).replace(/\|/g,'/') + ' | ' + q.ie + ' | ' + q.moment + ' | ' +
+        (q.minutes < 1 ? Math.round(q.minutes*60) + ' s' : q.minutes.toFixed(1) + ' min') + ' |');
+      if(!groupes[q.decor]) groupes[q.decor] = { seqs:[], min:0 };
+      groupes[q.decor].seqs.push(q.num);
+      groupes[q.decor].min += q.minutes;
+    }
+    l.push('','### Plan de travail par décor','');
+    Object.keys(groupes).sort(function(a,b){ return groupes[b].min - groupes[a].min; }).forEach(function(nom){
+      var g = groupes[nom];
+      l.push('- **' + nom + '** — séq. ' + g.seqs.join(', ') + ' · ' + g.min.toFixed(1) + ' min estimées');
+    });
+    l.push('');
+  }
+
   if(etat.daTexte){
     l.push('## Parti pris d\'image','');
     var pal = (etat.da && etat.da.palette) || [];
@@ -2508,9 +2622,19 @@ function envoyer(){
   });
 }
 
+function adopterTitreDepuisNote(){
+  if(etat.titre || !etat.note) return;
+  var m = etat.note.match(/(?:ce film s['’]appelle|film intitul[ée])\s+(?:\*{1,2}|«|["“])([^*»"”\n]{2,80})(?:\*{1,2}|»|["”])/i);
+  if(!m) return;
+  var titre = m[1].trim();
+  if(titre.length < 2 || titre.length > 80) return;
+  etat.titre = titre;
+  if($('f-titre')) $('f-titre').value = titre;
+}
+
 function ecrireNote(){
   if(occupe) return;
-  var m = socle();
+  var m = socle({ sansNote:true });
   m.push({ role:'user', content:
     'Rédige la note d\'intention du film. Quatre parties nettes, sans titres numérotés : le sujet et pourquoi il vaut d\'être filmé ; ' +
     'le parti pris de mise en scène ; le traitement de l\'image et du son ; la direction d\'acteurs. ' +
@@ -2522,6 +2646,7 @@ function ecrireNote(){
     $('sortie-note').textContent = t;
   }).then(function(r){
     etat.note = r.texte.trim();
+    adopterTitreDepuisNote();
     $('sortie-note').textContent = etat.note;
     marquerPhases(); rendreDossier(); sauver(); moteur(false);
     service('Note écrite par ' + r.moteur + '.');
@@ -2537,51 +2662,89 @@ function ecrireNote(){
 
 function decouper(ajout){
   if(occupe) return;
-  var choix = $('f-sequence').value, texteSeq = '', s = $('f-scene').value.trim();
+  var choix = $('f-sequence').value;
+  var texteSeq = '';
+  var s = $('f-scene').value.trim();
+  var pieceCible = null;
+  var sourceId = '';
+  var sourceLabel = '';
+
   if(choix){
-    var d = choix.split(':'), p = etat.pieces[parseInt(d[0],10)];
-    var b = p && (corpsDe(p).blocs || [])[parseInt(d[1],10)];
+    var d = choix.split(':');
+    pieceCible = etat.pieces[parseInt(d[0],10)];
+    var b = pieceCible && (corpsDe(pieceCible).blocs || [])[parseInt(d[1],10)];
     if(b){
-      texteSeq = b.texte.slice(0, 14000);
+      texteSeq = b.texte.slice(0, 18000);
       if(!s) s = b.entete;
+      sourceId = 'piece:' + pieceCible.id + ':' + d[1];
+      sourceLabel = pieceCible.nom + ' — ' + b.entete;
     }
   }
+
   if(!s && !texteSeq){ service('Choisissez une séquence, ou décrivez-la.'); return; }
+  if(!sourceId){
+    sourceId = 'libre:' + s.toLowerCase().replace(/\s+/g,' ').slice(0,240);
+    sourceLabel = 'Saisie libre — ' + s.slice(0,100);
+  }
+
+  if(ajout && etat.plans.length && (!etat.planSource || etat.planSource !== sourceId)){
+    service('La séquence a changé : utilisez « Découper la séquence » pour repartir proprement. Aucun ancien plan ne sera mélangé.', true);
+    return;
+  }
+
   etat.scene = s;
-  var m = socle();
+  var m = socle(pieceCible ? { pieceId:pieceCible.id, sansNote:true } : { sansPieces:true });
   var consigne =
     'Découpe cette séquence en plans : ' + s +
-    (texteSeq ? '\n\nTexte intégral de la séquence, à respecter à la lettre :\n"""\n' + texteSeq + '\n"""' : '') + '\n\n' +
+    (texteSeq ? '\n\nSOURCE UNIQUE DE LA SÉQUENCE — à respecter à la lettre :\n"""\n' + texteSeq + '\n"""' : '') + '\n\n' +
+    'N\'invente aucun personnage, objet, action, décor ou événement absent de cette source. ' +
+    'Les choix de focale, cadre, mouvement, lumière et durée sont des propositions de mise en scène, jamais des faits du récit. ' +
+    'Chaque action doit décrire quelque chose de visible ou d\'audible, concret et tournable ; aucune métaphore vague ni action impossible à filmer. ' +
     'Réponds UNIQUEMENT par un tableau JSON, sans texte autour, sans balises de code. ' +
     'Chaque objet : {"echelle","mouvement","focale","angle","duree","action"}. ' +
     'echelle = valeur de plan française (très gros plan, gros plan, plan rapproché, plan américain, plan moyen, plan d\'ensemble, plan général). ' +
     'mouvement = fixe, panoramique, travelling avant/latéral, steadicam, grue, caméra portée… ' +
     'focale en mm. angle = à hauteur, plongée, contre-plongée, incliné. duree en secondes, par exemple "6 s". ' +
-    'action = ce qui se passe et l\'intention de mise en scène, deux phrases au plus. ' +
+    'action = ce qui se passe réellement dans la séquence + intention de mise en scène, deux phrases au plus. ' +
     'Entre 8 et 16 plans, cohérents avec les moyens annoncés.';
+
   if(ajout && etat.plans.length){
-    consigne += '\n\nPlans déjà établis, à ne pas répéter : ' +
+    consigne += '\n\nPlans déjà établis pour CETTE MÊME SÉQUENCE, à ne pas répéter : ' +
       etat.plans.map(function(p){ return p.echelle + ' / ' + p.action; }).join(' ; ') +
-      '\nPropose la suite du découpage.';
+      '\nPropose uniquement la suite.';
   }
+
   m.push({ role:'user', content: consigne });
   moteur(true, 'Découpage en cours', 'Échelles, focales, mouvements');
-  demander(m, 0.6, 2600).then(function(r){
+
+  demander(m, 0.45, 2600).then(function(r){
     var t = extraireJson(r.texte);
-    if(!t.length) throw new Error('Le modèle n\'a produit aucun plan.');
+    if(!Array.isArray(t) || !t.length) throw new Error('Le modèle n\'a produit aucun plan.');
+
     var neufs = t.map(function(p){
-      return {
-        echelle:   String(p.echelle   || ''),
-        mouvement: String(p.mouvement || ''),
-        focale:    String(p.focale    || ''),
-        angle:     String(p.angle     || ''),
-        duree:     String(p.duree     || ''),
-        action:    String(p.action    || '')
+      var plan = {
+        echelle:   String(p.echelle   || '').trim(),
+        mouvement: String(p.mouvement || '').trim(),
+        focale:    String(p.focale    || '').trim(),
+        angle:     String(p.angle     || '').trim(),
+        duree:     String(p.duree     || '').trim(),
+        action:    String(p.action    || '').trim()
       };
+      if(!plan.echelle || !plan.duree || plan.action.length < 8){
+        throw new Error('Découpage incomplet : un plan manque d\'échelle, de durée ou d\'action exploitable.');
+      }
+      return plan;
     });
+
+    if(!ajout){
+      etat.planSource = sourceId;
+      etat.planSourceLabel = sourceLabel;
+      etat.storyboard = [];
+      rendreStoryboard([]);
+    }
     etat.plans = ajout ? etat.plans.concat(neufs) : neufs;
     rendreDecoupage(); marquerPhases(); rendreDossier(); sauver(); moteur(false);
-    service(neufs.length + ' plans découpés par ' + r.moteur + '.');
+    service(neufs.length + ' plans découpés par ' + r.moteur + ' — source verrouillée.');
   }).catch(function(e){ moteur(false); service(e.message, true); });
 }
 
@@ -2884,7 +3047,7 @@ function demarrer(){
     if(!window.confirm('Effacer le film en cours, classeur compris ? Les clés sont conservées.')) return;
     etat.titre=''; etat.genre=''; etat.budget=''; etat.scene=''; etat.pieces=[];
     etat.storyboard=[]; corpus = {}; coffre.vider();
-    etat.note=''; etat.plans=[]; etat.da=null; etat.daTexte=''; etat.prod='';
+    etat.note=''; etat.plans=[]; etat.planSource=''; etat.planSourceLabel=''; etat.da=null; etat.daTexte=''; etat.prod='';
     etat.fil=[{ qui:'real', texte:ACCUEIL }];
     sauver(); rendreTout(); onglet('plateau');
     service('Nouveau film.');
