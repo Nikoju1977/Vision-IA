@@ -8,10 +8,8 @@
 #include <opencv2/core.hpp>
 #include <opencv2/objdetect.hpp>
 
-namespace tflite {
-class FlatBufferModel;
-class Interpreter;
-}
+#include <tensorflow/lite/interpreter.h>
+#include <tensorflow/lite/model.h>
 
 class VisionEngine {
 public:
