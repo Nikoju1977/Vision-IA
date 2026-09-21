@@ -15,7 +15,7 @@ Agent autonome qui tient le rôle de réalisateur : il prend le projet au pitch 
 
 ## Moteurs
 
-Chaîne de secours automatique : Mistral Small → Groq (Llama 3.3 70B) → Cerebras (Llama 3.3 70B). Une clé suffit ; avec plusieurs, l'app bascule seule si un fournisseur tombe.
+Chaîne de secours automatique : Mistral → Groq (GPT-OSS 20B) → Cerebras. Une clé suffit ; avec plusieurs, l'app bascule seule si un fournisseur tombe.
 
 Clés à récupérer sur `console.groq.com`, `cloud.cerebras.ai`, `console.mistral.ai`. Elles sont stockées via `safeStorage` (localStorage avec repli mémoire) et ne quittent l'appareil que vers le fournisseur choisi.
 
@@ -62,7 +62,7 @@ Quand **Mistral est la seule clé configurée**, Vision-IA n'utilise pas l'API B
 Le localStorage plafonne vers 5 Mo : il ne garde que les métadonnées du film. Les corps de texte vont en IndexedDB, avec repli en mémoire si la base est refusée (Safari en navigation privée) — dans ce cas les pièces disparaissent à la fermeture de l'onglet, le reste du film survit.
 
 Un PDF scanné n'a pas de texte à extraire : l'app le détecte et renvoie vers « Analyser un repérage ». La lecture d'image demande la clé Mistral, seul moteur de la chaîne à voir les images. Pas de lecture EPUB pour l'instant : convertir en PDF ou en TXT.
-
+\n\nAvec une clé Groq configurée, le dépouillement gratuit utilise aussi **Groq GPT-OSS 20B** (`openai/gpt-oss-20b`) en secours après les modèles Mistral. Le modèle Groq historique `llama-3.3-70b-versatile` a été retiré du Free/Developer tier le 16 août 2026.\n
 ## Conducteur
 
 Dès qu'un scénario est versé, la phase Conducteur se remplit sans une seule requête IA, à partir des seuls en-têtes de séquence : minutage estimé (1 500 signes ≈ 1 page ≈ 1 minute), nombre de décors distincts, répartition intérieurs/extérieurs, séquences de nuit, et surtout le **regroupement par décor** — l'ordre dans lequel tourner pour ne pas revenir deux fois au même endroit.
