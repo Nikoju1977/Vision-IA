@@ -774,6 +774,7 @@ function secondesAvantReprise(x){
 
 function libelleHttp(code, detail){
   if(code === 429) return 'Quota atteint (429)' + (detail ? ' · ' + detail : '');
+  if(code === 402) return 'Paiement requis (402)' + (detail ? ' · ' + detail : '');
   if(code === 401 || code === 403) return 'Clé refusée (' + code + ')' + (detail ? ' · ' + detail : '');
   if(code >= 500) return 'Moteur indisponible (' + code + ')';
   return 'HTTP ' + code + (detail ? ' · ' + detail : '');
@@ -1427,8 +1428,15 @@ function sortiesBatchDepuisTexte(texte){
   }).filter(Boolean);
 }
 
+function modeMistralGratuit(){
+  var dispo = cles();
+  return dispo.length === 1 && dispo[0].id === 'mistral';
+}
+
 function batchMistralDisponible(){
-  return !!sanitizeKey(trousseau.lire('mistral'));
+  /* Avec Mistral comme seule clé, on privilégie l'API Chat incluse dans le
+     mode gratuit : pas de Batch, donc pas de 402 lié à la facturation Batch. */
+  return !!sanitizeKey(trousseau.lire('mistral')) && !modeMistralGratuit();
 }
 
 function creerBatchDepouillement(p, lots, baseFiches, baseOffset, total, genre, generation){
@@ -1745,8 +1753,11 @@ function depouiller(i){
   if(p.batchMistral && p.batchMistral.id){
     service('Reprise du Batch Mistral déjà lancé.');
     travail = attendreBatchDepouillement(p, generation);
+  } else if(modeMistralGratuit()){
+    service('Mode Mistral gratuit — dépouillement tranche par tranche, avec reprise automatique.');
+    travail = depouillerTempsReel(p, lots, n, total, p.genre, generation);
   } else if(batchMistralDisponible() && lots.length >= 3){
-    service('Document long : dépouillement envoyé en Batch Mistral pour éviter la saturation temps réel.');
+    service('Document long : dépouillement envoyé en Batch Mistral.');
     travail = creerBatchDepouillement(
       p,
       lots,
@@ -1763,6 +1774,16 @@ function depouiller(i){
       p.dernierErreurBatch = detail;
       sauver();
 
+      /* Le Batch peut répondre 402 sur un compte sans moyen de paiement alors
+         que l'API Chat reste utilisable dans le mode gratuit. On poursuit donc
+         sur Mistral temps réel au lieu de bloquer le dépouillement. */
+      if(e && e.code === 402 && sanitizeKey(trousseau.lire('mistral'))){
+        service('Batch Mistral non disponible sans facturation — poursuite en Mistral gratuit.');
+        return depouillerTempsReel(
+          p, lots, n, total, p.genre, generation
+        );
+      }
+
       if(clesTempsReelSansMistral().length){
         service(
           'Batch Mistral indisponible (' + detail + ') — bascule immédiate sur un moteur de secours.'
@@ -1772,10 +1793,14 @@ function depouiller(i){
         );
       }
 
-      throw new Error(
-        'Batch Mistral indisponible : ' + detail +
-        '. Aucun moteur de secours configuré. Aucune attente de 90 s ne sera relancée.'
-      );
+      if(sanitizeKey(trousseau.lire('mistral'))){
+        service('Batch Mistral indisponible — reprise en Mistral temps réel sécurisé.');
+        return depouillerTempsReel(
+          p, lots, n, total, p.genre, generation
+        );
+      }
+
+      throw new Error('Aucun moteur disponible pour poursuivre le dépouillement.');
     });
   } else {
     travail = depouillerTempsReel(p, lots, n, total, p.genre, generation);
