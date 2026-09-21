@@ -525,6 +525,7 @@ footer{color:#465562;font-size:11.5px;text-align:center;padding:0 16px 26px}
 <div id="ecriture" aria-live="polite">
   <span class="pouls" aria-hidden="true"></span>
   <span id="ecriture-quoi">Vision-IA écrit…</span>
+  <button class="mini" id="b-auto-quota" hidden>Auto quota</button>
   <button class="mini" id="b-couper">Couper</button>
 </div>
 
@@ -563,7 +564,7 @@ var PROVIDERS = {
   mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest',    cadence:1800 }
 };
 /* Cadence minimale locale ; les quotas réels dépendent du compte. */
-var CADENCE_ETAT = 'vai_cadence_v1';
+var CADENCE_ETAT = 'vai_cadence_v2';
 var PLAFOND_CLE = 'vai_plafond_jetons';
 var FENETRE_JETONS = 60000;
 var ORDRE = ['mistral','groq','cerebras'];
@@ -816,6 +817,29 @@ function noterJetons(url, n){
   cadenceEcrire(o);
 }
 
+/* Une réservation protège la fenêtre TPM pendant l'appel. Dès que le
+   fournisseur renvoie l'usage réel, on remplace l'estimation au lieu de
+   compter les deux. Une requête refusée libère sa réservation. */
+function corrigerReservation(ticket, reel){
+  if(!ticket || !(reel > 0)) return;
+  var o = cadenceLire(), pi = piste(o, ticket.url);
+  pi.jetons = pi.jetons || [];
+  for(var i=pi.jetons.length-1;i>=0;i--){
+    if(pi.jetons[i][2] === ticket.id){
+      pi.jetons[i][1] = reel;
+      break;
+    }
+  }
+  jetonsRecents(pi, Date.now());
+  cadenceEcrire(o);
+}
+function libererReservation(ticket){
+  if(!ticket) return;
+  var o = cadenceLire(), pi = piste(o, ticket.url);
+  pi.jetons = (pi.jetons || []).filter(function(j){ return j[2] !== ticket.id; });
+  cadenceEcrire(o);
+}
+
 function avecVerrou(nom, travail){
   if(navigator.locks && navigator.locks.request){
     try { return navigator.locks.request(nom, travail); } catch(e){}
@@ -829,39 +853,70 @@ function tourDeRole(p, estimation, generation){
   if(generation == null) generation = generationCoupe;
   return avecVerrou('vai-cadence-' + p.url, function(){
     if(generation !== generationCoupe) throw interrompu();
+
     function verifier(){
-    var o = cadenceLire(), pi = piste(o, p.url);
-    var maintenant = Date.now();
-    if(generation !== generationCoupe) throw interrompu();
-    var cible = Math.max(pi.bloque || 0, (pi.depart || 0) + Math.max(p.cadence || 0, pi.cadence || 0));
+      var o = cadenceLire(), pi = piste(o, p.url);
+      var maintenant = Date.now();
+      if(generation !== generationCoupe) throw interrompu();
 
-    var plafond = plafondJetons();
-    if(plafond > 0){
-      var consommes = jetonsRecents(pi, maintenant);
-      if(estimation > plafond) throw new Error('Requête estimée à ' + estimation + ' jetons, au-delà du plafond/minute réglé (' + plafond + '). Vérifiez ce plafond dans Réglages ; les fiches sont conservées.');
-      for(var j=0; consommes + (estimation || 0) > plafond && j < pi.jetons.length; j++){
-        cible = Math.max(cible, pi.jetons[j][0] + FENETRE_JETONS);
-        consommes -= pi.jetons[j][1];
+      /* Les anciennes versions pouvaient mémoriser 60 s de cadence après un
+         429. Le backoff serveur vit désormais uniquement dans pi.bloque. */
+      var cadenceBase = Math.max(0, p.cadence || 0);
+      if((pi.cadence || 0) !== cadenceBase) pi.cadence = cadenceBase;
+
+      var cibleCadence = (pi.depart || 0) + cadenceBase;
+      var cibleServeur = pi.bloque || 0;
+      var cible = Math.max(cibleCadence, cibleServeur);
+      var raison = cibleServeur > maintenant && cibleServeur >= cibleCadence
+        ? 'quota serveur'
+        : 'cadence';
+
+      var plafond = plafondJetons();
+      if(plafond > 0){
+        var consommes = jetonsRecents(pi, maintenant);
+        if(estimation > plafond){
+          throw new Error(
+            'Requête estimée à ' + estimation +
+            ' jetons, au-delà du plafond/minute réglé (' + plafond +
+            '). Passez le plafond en Auto ou relevez la limite dans Réglages.'
+          );
+        }
+        for(var j=0; consommes + (estimation || 0) > plafond && j < pi.jetons.length; j++){
+          var cibleLocale = pi.jetons[j][0] + FENETRE_JETONS;
+          if(cibleLocale > cible){
+            cible = cibleLocale;
+            raison = 'plafond local ' + plafond + ' jetons/min';
+          }
+          consommes -= pi.jetons[j][1];
+        }
       }
+
+      var ms = Math.max(0, cible - maintenant);
+      if(ms > 0){
+        if(occupe){
+          $('ecriture').className = 'on';
+          $('ecriture-quoi').textContent =
+            p.nom + ' — ' + raison + ' : ' + Math.ceil(ms/1000) + ' s';
+          $('b-auto-quota').hidden = raison.indexOf('plafond local') !== 0;
+        }
+        return patienter(Math.min(ms, 1000)).then(verifier);
+      }
+
+      $('b-auto-quota').hidden = true;
+      pi.depart = maintenant;
+
+      var ticket = null;
+      if(estimation > 0){
+        var id = maintenant + '-' + Math.random().toString(36).slice(2);
+        pi.jetons = pi.jetons || [];
+        pi.jetons.push([maintenant, estimation, id]);
+        ticket = { url:p.url, id:id, estimation:estimation };
+      }
+
+      cadenceEcrire(o);
+      return ticket;
     }
 
-    var ms = Math.max(0, cible - maintenant);
-    if(ms > 0){
-      if(occupe){
-        $('ecriture').className = 'on';
-        $('ecriture-quoi').textContent = p.nom + ' — attente quota/cadence : ' + Math.ceil(ms/1000) + ' s';
-      }
-      return patienter(Math.min(ms, 1000)).then(verifier);
-    }
-    pi.depart = maintenant;
-    /* Réserve AVANT le départ : les autres onglets voient aussi cet appel. */
-    if(estimation > 0){
-      pi.jetons = pi.jetons || [];
-      pi.jetons.push([maintenant, estimation]);
-    }
-    cadenceEcrire(o);
-    return Promise.resolve();
-    }
     return verifier();
   });
 }
@@ -874,14 +929,20 @@ function penaliser(p, secondes){
   var s = Number(secondes) || 0;
   if(!(s > 0)) s = Math.min(30, Math.pow(2, Math.max(1, pi.echecs))) + Math.random();
   s = Math.max(1, s);
-  pi.cadence = Math.min(60000, Math.max(p.cadence || 0, pi.cadence || 0) * 2);
+
+  /* Le ralentissement transitoire est porté par bloque. Ne jamais transformer
+     un 429 ponctuel en cadence permanente de 60 secondes. */
+  pi.cadence = Math.max(0, p.cadence || 0);
   pi.bloque = Math.max(pi.bloque || 0, Date.now() + s * 1000);
   cadenceEcrire(o);
   return s;
 }
 function apaiser(p){
-  var o = cadenceLire();
-  if(o[p.url] && o[p.url].echecs){ o[p.url].echecs = 0; cadenceEcrire(o); }
+  var o = cadenceLire(), pi = piste(o, p.url);
+  pi.echecs = 0;
+  pi.cadence = Math.max(0, p.cadence || 0);
+  if((pi.bloque || 0) <= Date.now()) pi.bloque = 0;
+  cadenceEcrire(o);
 }
 
 /* Pour les appels qui ne passent pas par la chaîne (vision) :
@@ -919,9 +980,9 @@ function chaine(tenter, estimation){
     /* Un quota/minute exige une vraie fenêtre de repos. Six reprises bornées
        puis relais éventuel ; un quota persistant ne boucle jamais sans fin. */
     var ATTENTES = [60, 90, 90, 90, 90, 90];
-    return tourDeRole(p, estimation, generation).then(function(){
+    return tourDeRole(p, estimation, generation).then(function(ticket){
       if(generation !== generationCoupe) throw interrompu();
-      return tenter(p, k);
+      return tenter(p, k, ticket);
     }).then(function(t){
       if(!t) throw new Error('Réponse vide.');
       apaiser(p);
@@ -948,13 +1009,18 @@ function chaine(tenter, estimation){
 }
 
 function demander(messages, temperature, maxJetons){
-  return chaine(function(p, k){
+  return chaine(function(p, k, ticket){
     return xhrJson(p.url, {
       model: p.modele, messages: messages,
       temperature: (temperature == null ? 0.7 : temperature),
       max_tokens: maxJetons || 2400
     }, { Authorization: 'Bearer ' + k }).then(function(r){
+      var reel = r && r.usage && Number(r.usage.total_tokens);
+      if(reel > 0) corrigerReservation(ticket, reel);
       return r && r.choices && r.choices[0] && r.choices[0].message ? r.choices[0].message.content : '';
+    }).catch(function(e){
+      libererReservation(ticket);
+      throw e;
     });
   }, estimerJetons(messages, maxJetons || 2400));
 }
@@ -965,7 +1031,7 @@ function estimerJetons(messages, sortie){
 }
 
 /* ── Flux SSE en XHR : le texte s'écrit pendant qu'il arrive ── */
-function xhrFlux(url, corps, entetes, onMorceau, delai, pisteUrl){
+function xhrFlux(url, corps, entetes, onMorceau, delai, ticket){
   return new Promise(function(ok, ko){
     var x = new XMLHttpRequest();
     x.open('POST', url, true);
@@ -973,7 +1039,7 @@ function xhrFlux(url, corps, entetes, onMorceau, delai, pisteUrl){
     x.setRequestHeader('Content-Type','application/json');
     Object.keys(entetes||{}).forEach(function(h){ try{ x.setRequestHeader(h, entetes[h]); }catch(e){} });
 
-    var vu = 0, reste = '', texte = '', fini = false;
+    var vu = 0, reste = '', texte = '', fini = false, usageTotal = 0;
 
     function avaler(){
       var brut = x.responseText.slice(vu);
@@ -988,7 +1054,7 @@ function xhrFlux(url, corps, entetes, onMorceau, delai, pisteUrl){
         if(charge === '[DONE]'){ fini = true; continue; }
         try {
           var o = JSON.parse(charge);
-          if(o.usage && pisteUrl) noterJetons(pisteUrl, o.usage.total_tokens);
+          if(o.usage && Number(o.usage.total_tokens) > 0) usageTotal = Number(o.usage.total_tokens);
           var d = o.choices && o.choices[0] && (o.choices[0].delta || o.choices[0].message);
           if(d && d.content){ texte += d.content; if(onMorceau) onMorceau(texte); }
         } catch(e){}
@@ -1000,6 +1066,7 @@ function xhrFlux(url, corps, entetes, onMorceau, delai, pisteUrl){
       if(enCours === x) enCours = null;
       if(x.status >= 200 && x.status < 300){
         avaler();
+        if(usageTotal > 0) corrigerReservation(ticket, usageTotal);
         if(!texte) ko(new Error('Flux vide.')); else ok(texte);
       } else {
         var d = '';
@@ -1007,26 +1074,27 @@ function xhrFlux(url, corps, entetes, onMorceau, delai, pisteUrl){
         var err = new Error(libelleHttp(x.status, d));
         err.code = x.status;
         err.attendre = secondesAvantReprise(x);
+        libererReservation(ticket);
         ko(err);
       }
     };
-    x.onabort   = function(){ if(enCours === x) enCours = null; ko(interrompu()); };
-    x.onerror   = function(){ if(enCours === x) enCours = null; ko(new Error('Réseau injoignable.')); };
-    x.ontimeout = function(){ if(enCours === x) enCours = null; ko(new Error('Délai dépassé.')); };
+    x.onabort   = function(){ if(enCours === x) enCours = null; libererReservation(ticket); ko(interrompu()); };
+    x.onerror   = function(){ if(enCours === x) enCours = null; libererReservation(ticket); ko(new Error('Réseau injoignable.')); };
+    x.ontimeout = function(){ if(enCours === x) enCours = null; libererReservation(ticket); ko(new Error('Délai dépassé.')); };
     enCours = x;
     x.send(JSON.stringify(corps));
   });
 }
 
 function demanderFlux(messages, temperature, maxJetons, onMorceau){
-  return chaine(function(p, k){
+  return chaine(function(p, k, ticket){
     return xhrFlux(p.url, {
       model: p.modele, messages: messages, stream: true,
       /* Sans include_usage, aucun décompte de jetons ne revient en flux. */
       stream_options: { include_usage: true },
       temperature: (temperature == null ? 0.7 : temperature),
       max_tokens: maxJetons || 2400
-    }, { Authorization: 'Bearer ' + k }, onMorceau || null, 180000);
+    }, { Authorization: 'Bearer ' + k }, onMorceau || null, 180000, ticket);
   }, estimerJetons(messages, maxJetons || 2400));
 }
 
@@ -1225,6 +1293,16 @@ function tranches(t, taille){
   return out;
 }
 
+function tailleTrancheDepouillement(){
+  var plafond = plafondJetons();
+  if(!(plafond > 0)) return 18000;
+
+  /* On maximise la tranche tout en gardant ~10 % de marge sur le plafond
+     local. Sortie (500) + consignes/enveloppe (~300) sont réservées. */
+  var cible = Math.floor((plafond * 0.90 - 800) * 3);
+  return Math.max(6000, Math.min(18000, cible));
+}
+
 function extraireDocx(f){
   if(!window.mammoth) return Promise.reject(new Error('Lecteur DOCX pas encore chargé. Réessayez dans deux secondes.'));
   return lireBinaire(f).then(function(buf){
@@ -1279,32 +1357,69 @@ function depouiller(i){
   if(!corpus[p.id] || (p.signes && c.texte.length !== p.signes)){
     service('Texte intégral indisponible : attendez son chargement ou réimportez le document. Aucune fiche modifiée.', true); return;
   }
-  var lots = tranches(c.texte, 9000);
-  if(!lots.length){ service('Rien à dépouiller.'); return; }
 
   if(!Array.isArray(p.fiches)) p.fiches = [];
-  var n = p.fiches.length;               /* reprise là où ça s'était arrêté */
-  if(n) service('Reprise du dépouillement à la tranche ' + (n+1) + '.');
-  moteur(true, 'Dépouillement', p.nom + ' — tranche ' + (n+1) + ' sur ' + lots.length);
+
+  /* Migration transparente des dépouillements commencés avant le mode
+     adaptatif : on calcule exactement la quantité de texte déjà couverte par
+     les anciennes tranches de 9000 caractères, puis on reprend à cet offset. */
+  if(!(typeof p.depouillementOffset === 'number' && p.depouillementOffset >= 0)){
+    p.depouillementOffset = 0;
+    if(p.fiches.length){
+      var anciens = tranches(c.texte, 9000);
+      for(var a=0; a<Math.min(p.fiches.length, anciens.length); a++){
+        p.depouillementOffset += anciens[a].length;
+      }
+    }
+  }
+
+  p.depouillementOffset = Math.max(0, Math.min(c.texte.length, p.depouillementOffset));
+
+  var taille = tailleTrancheDepouillement();
+  var reste = c.texte.slice(p.depouillementOffset);
+  var lots = tranches(reste, taille);
+
+  if(!lots.length && !p.fiches.length){ service('Rien à dépouiller.'); return; }
+
+  var n = p.fiches.length;
+  var pos = 0;
+  var total = n + lots.length;
+
+  if(n){
+    service(
+      'Reprise après ' + n + ' fiche' + (n>1?'s':'') +
+      ' — ' + lots.length + ' tranche' + (lots.length>1?'s':'') + ' restante' + (lots.length>1?'s':'') + '.'
+    );
+  }
+
+  moteur(true, 'Dépouillement', p.nom + ' — tranche ' + Math.min(n+1,total) + ' sur ' + total);
   $('ecriture').className = 'on';
   var generation = generationCoupe;
 
   function tranche(){
     if(generation !== generationCoupe) return Promise.reject(interrompu());
-    if(n >= lots.length) return Promise.resolve();
-    $('tirage-detail').textContent = p.nom + ' — tranche ' + (n+1) + ' sur ' + lots.length;
-    $('ecriture-quoi').textContent = 'Dépouillement : ' + (n+1) + '/' + lots.length;
+    if(pos >= lots.length) return Promise.resolve();
+
+    var numero = n + 1;
+    $('tirage-detail').textContent = p.nom + ' — tranche ' + numero + ' sur ' + total;
+    $('ecriture-quoi').textContent = 'Dépouillement : ' + numero + '/' + total;
+
     var quoi = p.genre === 'scenario'
       ? 'Dépouille cette portion de scénario en réalisateur : personnages présents, ce qui se joue dramatiquement, décors, contraintes de tournage repérées. 120 mots, texte suivi, aucune formule d\'introduction.'
       : 'Dépouille cette portion de texte en réalisateur qui cherche un film dedans : personnages, ce qui se passe, lieux, images fortes. 120 mots, texte suivi, aucune formule d\'introduction.';
+
+    var portion = lots[pos];
+
     return demander([
       { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
-      { role:'user', content: quoi + '\n\n--- PORTION ' + (n+1) + '/' + lots.length + ' ---\n' + lots[n] }
+      { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
     ], 0.4, 500).then(function(r){
-      p.fiches.push('[' + (n+1) + '/' + lots.length + '] ' + r.texte.trim());
+      p.fiches.push('[' + numero + '/' + total + '] ' + r.texte.trim());
+      p.depouillementOffset += portion.length;
+      pos++;
       n++;
-      sauver();                          /* chaque fiche est acquise */
-      return tranche();                  /* la cadence est tenue par tourDeRole() */
+      sauver();
+      return tranche();
     });
   }
 
@@ -1324,6 +1439,7 @@ function depouiller(i){
     ], 0.6, 1800);
   }).then(function(r){
     p.synthese = r.texte.trim();
+    p.depouillementOffset = c.texte.length;
     rendrePieces(); sauver(); moteur(false);
     service('« ' + p.nom + ' » dépouillé — la note de lecture entre dans le contexte.');
   }).catch(function(e){
@@ -2223,6 +2339,13 @@ function demarrer(){
     etat.fil=[{ qui:'real', texte:ACCUEIL }];
     sauver(); rendreTout(); onglet('plateau');
     service('Nouveau film.');
+  });
+
+  $('b-auto-quota').addEventListener('click', function(){
+    safeStorage.setItem(PLAFOND_CLE, '0');
+    $('k-plafond').value = '0';
+    $('b-auto-quota').hidden = true;
+    service('Plafond local désactivé : les limites réelles du fournisseur pilotent maintenant la cadence.');
   });
 
   $('b-couper').addEventListener('click', function(){
