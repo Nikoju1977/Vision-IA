@@ -48,7 +48,9 @@ jobs:
           assert "corrigerReservation(ticket, reel)" in html
           assert "function strategieDepouillement(" in html
           assert "if(strategie === 'groq' || strategie === 'secours') return 9000;" in html
-          assert "Document long — Groq prend directement le dépouillement" in html
+          assert "Document long — Groq en priorité, avec repli Mistral automatique si nécessaire." in html
+          assert "route === 'groq-premier'" in html
+          assert "demanderMistralGratuit(messages, 0.4, 500, groqPremier)" in html
           assert "function demanderMistralGratuit(" in html
           assert "MIN_TRANCHE_FREE = 900" in html
           assert "p.tailleTrancheMistral = nouvelleTaille" in html
