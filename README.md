@@ -15,7 +15,7 @@ Agent autonome qui tient le rôle de réalisateur : il prend le projet au pitch 
 
 ## Moteurs
 
-Chaîne de secours automatique : Groq (Llama 3.3 70B) → Cerebras (Llama 3.3 70B) → Mistral Small. Une clé suffit ; avec plusieurs, l'app bascule seule si un fournisseur tombe.
+Chaîne de secours automatique : Mistral Small → Groq (Llama 3.3 70B) → Cerebras (Llama 3.3 70B). Une clé suffit ; avec plusieurs, l'app bascule seule si un fournisseur tombe.
 
 Clés à récupérer sur `console.groq.com`, `cloud.cerebras.ai`, `console.mistral.ai`. Elles sont stockées via `safeStorage` (localStorage avec repli mémoire) et ne quittent l'appareil que vers le fournisseur choisi.
 
@@ -52,6 +52,10 @@ Les en-têtes de séquence sont repérés à l'import (`INT.`, `EXT.`, `INT./EXT
 Les chapitres sont repérés de la même façon. Au-delà de 5 k signes, un bouton **Dépouiller en entier** lance une lecture en map-reduce : le texte est découpé en tranches de 9 k signes, chacune fait l'objet d'une fiche de dépouillement, puis toutes les fiches sont recousues en une note de lecture de réalisateur (histoire et arc, personnages et direction de jeu, lieux et lumière, séquences porteuses, difficultés de tournage). C'est cette note qui entre ensuite dans le contexte — le film travaille alors sur l'œuvre entière, pas sur son premier chapitre.
 
 Compter une requête par tranche : un scénario de long métrage fait environ 25 tranches, un roman de 400 pages environ 80. Le garde-fou est fixé à 90.
+
+### Mode Mistral gratuit
+
+Quand **Mistral est la seule clé configurée**, Vision-IA n'utilise pas l'API Batch : les documents longs sont dépouillés via `/v1/chat/completions`, une tranche après l'autre. Chaque fiche est sauvegardée immédiatement et le traitement reprend à l'offset enregistré après une coupure ou un quota temporaire. Un `402` reçu lors d'une tentative Batch déclenche également ce repli vers Mistral temps réel au lieu de bloquer le film. Les `429` restent gérés par la cadence partagée et `Retry-After`.
 
 ### Stockage
 
