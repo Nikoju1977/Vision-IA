@@ -33,7 +33,7 @@ class CorrectionResult:
     attempts: tuple[Attempt, ...]
     message: str
 
-FENCE_RE = re.compile(r"\\x60\\x60\\x60(?:python|py)?\\s*\\n(.*?)\\n\\x60\\x60\\x60", re.IGNORECASE | re.DOTALL)
+FENCE_RE = re.compile(r"\x60\x60\x60(?:python|py)?\s*\n(.*?)\n\x60\x60\x60", re.IGNORECASE | re.DOTALL)
 
 def extract_code(response_text: str) -> str:
     if not isinstance(response_text, str):
@@ -75,9 +75,9 @@ def run_generated_code(
 
     with tempfile.TemporaryDirectory(prefix="vision-ia-agent-") as tmp:
         script_path = os.path.join(tmp, "generated.py")
-        with open(script_path, "w", encoding="utf-8", newline="\\n") as handle:
+        with open(script_path, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(code)
-            handle.write("\\n")
+            handle.write("\n")
 
         env = {
             "PATH": os.environ.get("PATH", ""),
