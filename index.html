@@ -2211,7 +2211,7 @@ function majSequences(){
   var s = $('f-sequence'), h = '<option value="">Séquence à découper — saisie libre</option>';
   for(var i=0;i<etat.pieces.length;i++){
     var p = etat.pieces[i];
-    if(p.genre === 'image') continue;
+    if(p.genre !== 'scenario') continue;
     var b = corpsDe(p).blocs || [];
     if(!b.length) continue;
     h += '<optgroup label="' + esc(p.nom) + '">';
@@ -2384,6 +2384,8 @@ function charger(){
     Object.keys(o).forEach(function(c){ if(o[c] != null) etat[c] = o[c]; });
     if(!etat.consigne) etat.consigne = CONSIGNE_PAR_DEFAUT;
     if(!Array.isArray(etat.pieces)) etat.pieces = [];
+    if(typeof etat.planSource !== 'string') etat.planSource = '';
+    if(typeof etat.planSourceLabel !== 'string') etat.planSourceLabel = '';
     if(!etat.fil || !etat.fil.length) etat.fil = [{ qui:'real', texte:ACCUEIL }];
   } catch(e){}
 }
@@ -2451,6 +2453,7 @@ function rendreDossier(){
 }
 
 function rendreTout(){
+  adopterTitreDepuisNote();
   $('f-titre').value  = etat.titre;
   $('f-genre').value  = etat.genre;
   $('f-format').value = etat.format;
@@ -2487,6 +2490,7 @@ function dossierMarkdown(){
   if(etat.plans.length){
     l.push('## Découpage technique','');
     if(etat.scene) l.push('_' + etat.scene + '_','');
+    if(etat.planSourceLabel) l.push('_Source verrouillée : ' + String(etat.planSourceLabel).replace(/\|/g,'/') + '_','');
     l.push('| Plan | Échelle | Mouvement | Focale | Angle | Durée | Action et intention |');
     l.push('|---|---|---|---|---|---|---|');
     for(var i=0;i<etat.plans.length;i++){
@@ -2496,6 +2500,29 @@ function dossierMarkdown(){
     }
     l.push('');
   }
+  var seqs = sequencesDuFilm();
+  if(seqs.length){
+    l.push('## Conducteur','');
+    l.push('| Séq. | En-tête | Décor | I/E | Moment | ≈ durée |');
+    l.push('|---:|---|---|---|---|---:|');
+    var groupes = {};
+    for(var s=0;s<seqs.length;s++){
+      var q = seqs[s];
+      l.push('| ' + q.num + ' | ' + String(q.entete).replace(/\|/g,'/') + ' | ' +
+        String(q.decor).replace(/\|/g,'/') + ' | ' + q.ie + ' | ' + q.moment + ' | ' +
+        (q.minutes < 1 ? Math.round(q.minutes*60) + ' s' : q.minutes.toFixed(1) + ' min') + ' |');
+      if(!groupes[q.decor]) groupes[q.decor] = { seqs:[], min:0 };
+      groupes[q.decor].seqs.push(q.num);
+      groupes[q.decor].min += q.minutes;
+    }
+    l.push('','### Plan de travail par décor','');
+    Object.keys(groupes).sort(function(a,b){ return groupes[b].min - groupes[a].min; }).forEach(function(nom){
+      var g = groupes[nom];
+      l.push('- **' + nom + '** — séq. ' + g.seqs.join(', ') + ' · ' + g.min.toFixed(1) + ' min estimées');
+    });
+    l.push('');
+  }
+
   if(etat.daTexte){
     l.push('## Parti pris d\'image','');
     var pal = (etat.da && etat.da.palette) || [];
@@ -2579,9 +2606,19 @@ function envoyer(){
   });
 }
 
+function adopterTitreDepuisNote(){
+  if(etat.titre || !etat.note) return;
+  var m = etat.note.match(/(?:ce film s['’]appelle|film intitul[ée])\s+(?:\*{1,2}|«|["“])([^*»"”\n]{2,80})(?:\*{1,2}|»|["”])/i);
+  if(!m) return;
+  var titre = m[1].trim();
+  if(titre.length < 2 || titre.length > 80) return;
+  etat.titre = titre;
+  if($('f-titre')) $('f-titre').value = titre;
+}
+
 function ecrireNote(){
   if(occupe) return;
-  var m = socle();
+  var m = socle({ sansNote:true });
   m.push({ role:'user', content:
     'Rédige la note d\'intention du film. Quatre parties nettes, sans titres numérotés : le sujet et pourquoi il vaut d\'être filmé ; ' +
     'le parti pris de mise en scène ; le traitement de l\'image et du son ; la direction d\'acteurs. ' +
@@ -2593,6 +2630,7 @@ function ecrireNote(){
     $('sortie-note').textContent = t;
   }).then(function(r){
     etat.note = r.texte.trim();
+    adopterTitreDepuisNote();
     $('sortie-note').textContent = etat.note;
     marquerPhases(); rendreDossier(); sauver(); moteur(false);
     service('Note écrite par ' + r.moteur + '.');
@@ -2608,51 +2646,89 @@ function ecrireNote(){
 
 function decouper(ajout){
   if(occupe) return;
-  var choix = $('f-sequence').value, texteSeq = '', s = $('f-scene').value.trim();
+  var choix = $('f-sequence').value;
+  var texteSeq = '';
+  var s = $('f-scene').value.trim();
+  var pieceCible = null;
+  var sourceId = '';
+  var sourceLabel = '';
+
   if(choix){
-    var d = choix.split(':'), p = etat.pieces[parseInt(d[0],10)];
-    var b = p && (corpsDe(p).blocs || [])[parseInt(d[1],10)];
+    var d = choix.split(':');
+    pieceCible = etat.pieces[parseInt(d[0],10)];
+    var b = pieceCible && (corpsDe(pieceCible).blocs || [])[parseInt(d[1],10)];
     if(b){
-      texteSeq = b.texte.slice(0, 14000);
+      texteSeq = b.texte.slice(0, 18000);
       if(!s) s = b.entete;
+      sourceId = 'piece:' + pieceCible.id + ':' + d[1];
+      sourceLabel = pieceCible.nom + ' — ' + b.entete;
     }
   }
+
   if(!s && !texteSeq){ service('Choisissez une séquence, ou décrivez-la.'); return; }
+  if(!sourceId){
+    sourceId = 'libre:' + s.toLowerCase().replace(/\s+/g,' ').slice(0,240);
+    sourceLabel = 'Saisie libre — ' + s.slice(0,100);
+  }
+
+  if(ajout && etat.plans.length && (!etat.planSource || etat.planSource !== sourceId)){
+    service('La séquence a changé : utilisez « Découper la séquence » pour repartir proprement. Aucun ancien plan ne sera mélangé.', true);
+    return;
+  }
+
   etat.scene = s;
-  var m = socle();
+  var m = socle(pieceCible ? { pieceId:pieceCible.id, sansNote:true } : { sansPieces:true });
   var consigne =
     'Découpe cette séquence en plans : ' + s +
-    (texteSeq ? '\n\nTexte intégral de la séquence, à respecter à la lettre :\n"""\n' + texteSeq + '\n"""' : '') + '\n\n' +
+    (texteSeq ? '\n\nSOURCE UNIQUE DE LA SÉQUENCE — à respecter à la lettre :\n"""\n' + texteSeq + '\n"""' : '') + '\n\n' +
+    'N\'invente aucun personnage, objet, action, décor ou événement absent de cette source. ' +
+    'Les choix de focale, cadre, mouvement, lumière et durée sont des propositions de mise en scène, jamais des faits du récit. ' +
+    'Chaque action doit décrire quelque chose de visible ou d\'audible, concret et tournable ; aucune métaphore vague ni action impossible à filmer. ' +
     'Réponds UNIQUEMENT par un tableau JSON, sans texte autour, sans balises de code. ' +
     'Chaque objet : {"echelle","mouvement","focale","angle","duree","action"}. ' +
     'echelle = valeur de plan française (très gros plan, gros plan, plan rapproché, plan américain, plan moyen, plan d\'ensemble, plan général). ' +
     'mouvement = fixe, panoramique, travelling avant/latéral, steadicam, grue, caméra portée… ' +
     'focale en mm. angle = à hauteur, plongée, contre-plongée, incliné. duree en secondes, par exemple "6 s". ' +
-    'action = ce qui se passe et l\'intention de mise en scène, deux phrases au plus. ' +
+    'action = ce qui se passe réellement dans la séquence + intention de mise en scène, deux phrases au plus. ' +
     'Entre 8 et 16 plans, cohérents avec les moyens annoncés.';
+
   if(ajout && etat.plans.length){
-    consigne += '\n\nPlans déjà établis, à ne pas répéter : ' +
+    consigne += '\n\nPlans déjà établis pour CETTE MÊME SÉQUENCE, à ne pas répéter : ' +
       etat.plans.map(function(p){ return p.echelle + ' / ' + p.action; }).join(' ; ') +
-      '\nPropose la suite du découpage.';
+      '\nPropose uniquement la suite.';
   }
+
   m.push({ role:'user', content: consigne });
   moteur(true, 'Découpage en cours', 'Échelles, focales, mouvements');
-  demander(m, 0.6, 2600).then(function(r){
+
+  demander(m, 0.45, 2600).then(function(r){
     var t = extraireJson(r.texte);
-    if(!t.length) throw new Error('Le modèle n\'a produit aucun plan.');
+    if(!Array.isArray(t) || !t.length) throw new Error('Le modèle n\'a produit aucun plan.');
+
     var neufs = t.map(function(p){
-      return {
-        echelle:   String(p.echelle   || ''),
-        mouvement: String(p.mouvement || ''),
-        focale:    String(p.focale    || ''),
-        angle:     String(p.angle     || ''),
-        duree:     String(p.duree     || ''),
-        action:    String(p.action    || '')
+      var plan = {
+        echelle:   String(p.echelle   || '').trim(),
+        mouvement: String(p.mouvement || '').trim(),
+        focale:    String(p.focale    || '').trim(),
+        angle:     String(p.angle     || '').trim(),
+        duree:     String(p.duree     || '').trim(),
+        action:    String(p.action    || '').trim()
       };
+      if(!plan.echelle || !plan.duree || plan.action.length < 8){
+        throw new Error('Découpage incomplet : un plan manque d\'échelle, de durée ou d\'action exploitable.');
+      }
+      return plan;
     });
+
+    if(!ajout){
+      etat.planSource = sourceId;
+      etat.planSourceLabel = sourceLabel;
+      etat.storyboard = [];
+      rendreStoryboard([]);
+    }
     etat.plans = ajout ? etat.plans.concat(neufs) : neufs;
     rendreDecoupage(); marquerPhases(); rendreDossier(); sauver(); moteur(false);
-    service(neufs.length + ' plans découpés par ' + r.moteur + '.');
+    service(neufs.length + ' plans découpés par ' + r.moteur + ' — source verrouillée.');
   }).catch(function(e){ moteur(false); service(e.message, true); });
 }
 
@@ -2955,7 +3031,7 @@ function demarrer(){
     if(!window.confirm('Effacer le film en cours, classeur compris ? Les clés sont conservées.')) return;
     etat.titre=''; etat.genre=''; etat.budget=''; etat.scene=''; etat.pieces=[];
     etat.storyboard=[]; corpus = {}; coffre.vider();
-    etat.note=''; etat.plans=[]; etat.da=null; etat.daTexte=''; etat.prod='';
+    etat.note=''; etat.plans=[]; etat.planSource=''; etat.planSourceLabel=''; etat.da=null; etat.daTexte=''; etat.prod='';
     etat.fil=[{ qui:'real', texte:ACCUEIL }];
     sauver(); rendreTout(); onglet('plateau');
     service('Nouveau film.');
