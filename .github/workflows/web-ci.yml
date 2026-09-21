@@ -1,0 +1,49 @@
+name: Vision-IA Web QA
+
+on:
+  push:
+    paths:
+      - "index.html"
+      - "sw.js"
+      - ".github/workflows/web-ci.yml"
+  pull_request:
+    paths:
+      - "index.html"
+      - "sw.js"
+      - ".github/workflows/web-ci.yml"
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract inline JavaScript
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          html = Path("index.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", html, re.I | re.S)
+          inline = [s for s in scripts if s.strip()]
+          assert inline, "No inline scripts found"
+          Path("/tmp/vision-ia-inline.js").write_text("\n;\n".join(inline), encoding="utf-8")
+          PY
+
+      - name: JavaScript syntax
+        run: node --check /tmp/vision-ia-inline.js
+
+      - name: Mistral throttle regression guards
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          html = Path("index.html").read_text(encoding="utf-8")
+          assert "vai_cadence_v2" in html
+          assert "pi.cadence = Math.max(0, p.cadence || 0);" in html
+          assert "Math.min(18000, cible)" in html
+          assert "depouillementOffset" in html
+          assert "corrigerReservation(ticket, reel)" in html
+          print("Mistral throttle regression guards: OK")
+          PY
