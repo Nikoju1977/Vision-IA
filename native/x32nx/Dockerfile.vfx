@@ -1,0 +1,16 @@
+FROM ubuntu:26.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends     build-essential     cmake     curl     ca-certificates     libopencv-dev     opencv-data     libprotobuf-dev     protobuf-compiler     libssl-dev     libgtest-dev     pybind11-dev     python3-dev     python3-numpy     python3-opencv     libtensorflow-lite-dev     libalembic-graphics-dev     && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/vision_ia
+COPY . .
+
+RUN mkdir -p models     && curl -fL       https://storage.googleapis.com/mediapipe-assets/face_landmark.tflite       -o models/face_landmark.tflite     && test -s models/face_landmark.tflite
+
+RUN cmake -S . -B build       -DCMAKE_BUILD_TYPE=Release       -DVISIONIA_BUILD_VFX_BINDINGS=ON     && cmake --build build --parallel     && ctest --test-dir build --output-on-failure
+
+RUN PYTHONPATH=/opt/vision_ia/build     python3 python/test_vfx_bindings.py       models/face_landmark.tflite
+
+CMD ["bash"]

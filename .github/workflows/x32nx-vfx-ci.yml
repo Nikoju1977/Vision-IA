@@ -1,0 +1,27 @@
+name: Vision-IA VFX Bindings QA
+
+on:
+  push:
+    paths:
+      - "native/x32nx/optional/**"
+      - "native/x32nx/python/**"
+      - "native/x32nx/CMakeLists.txt"
+      - "native/x32nx/Dockerfile.vfx"
+      - ".github/workflows/x32nx-vfx-ci.yml"
+  pull_request:
+    paths:
+      - "native/x32nx/optional/**"
+      - "native/x32nx/python/**"
+      - "native/x32nx/CMakeLists.txt"
+      - "native/x32nx/Dockerfile.vfx"
+      - ".github/workflows/x32nx-vfx-ci.yml"
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and smoke-test TFLite + Alembic bindings
+        working-directory: native/x32nx
+        run: docker build -f Dockerfile.vfx -t vision-ia-vfx .

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 import numpy as np
@@ -16,27 +15,13 @@ def check_geometric_tolerance(
     if last_points is None:
         return True
 
-    current = np.asarray(
-        current_points,
-        dtype=np.float32,
-    )
-
-    previous = np.asarray(
-        last_points,
-        dtype=np.float32,
-    )
+    current = np.asarray(current_points, dtype=np.float32)
+    previous = np.asarray(last_points, dtype=np.float32)
 
     if current.shape != previous.shape:
         return False
 
-    deviation = float(
-        np.max(
-            np.abs(
-                current - previous
-            )
-        )
-    )
-
+    deviation = float(np.max(np.abs(current - previous)))
     return deviation < max_delta
 
 
@@ -44,13 +29,14 @@ def batch_process_vfx(
     video_folder,
     output_alembic,
     model_path="models/face_landmark.tflite",
+    fps=30.0,
 ):
     try:
         import vision_ia
     except ImportError as exc:
         raise RuntimeError(
-            "Le module natif optionnel vision_ia n'est pas installé. "
-            "Construis d'abord les bindings TFLite/Alembic."
+            "Le module natif vision_ia n'est pas installé. "
+            "Construis avec -DVISIONIA_BUILD_VFX_BINDINGS=ON."
         ) from exc
 
     folder = Path(video_folder)
@@ -60,52 +46,50 @@ def batch_process_vfx(
             f"Dossier image introuvable : {folder}"
         )
 
-    engine = vision_ia.Engine(
-        model_path
-    )
-
-    exporter = vision_ia.AlembicExporter(
-        output_alembic
-    )
-
-    face_indices = list(
-        range(468 * 3)
-    )
-
-    last_valid_points = None
-
     frames = sorted(
         path
         for path in folder.iterdir()
         if path.is_file()
+        and path.suffix.lower() in {
+            ".png", ".jpg", ".jpeg", ".webp", ".bmp"
+        }
     )
 
     if not frames:
-        raise RuntimeError(
-            "Aucune frame à traiter."
-        )
+        raise RuntimeError("Aucune frame image à traiter.")
 
-    for frame_path in frames:
-        raw_landmarks = engine.process_frame(
-            str(frame_path)
-        )
+    engine = vision_ia.Engine(model_path)
+    exporter = vision_ia.AlembicExporter(output_alembic, fps)
 
-        if check_geometric_tolerance(
-            raw_landmarks,
-            last_valid_points,
-        ):
-            exporter.write_frame(
+    last_valid_points = None
+    point_ids = list(range(468))
+
+    try:
+        for frame_path in frames:
+            raw_landmarks = engine.process_frame(str(frame_path))
+
+            if len(raw_landmarks) != 468:
+                raise RuntimeError(
+                    f"Le moteur a retourné {len(raw_landmarks)} landmarks au lieu de 468."
+                )
+
+            if check_geometric_tolerance(
                 raw_landmarks,
-                face_indices,
-            )
-
-            last_valid_points = raw_landmarks
-
-        elif last_valid_points is not None:
-            exporter.write_frame(
                 last_valid_points,
-                face_indices,
-            )
+            ):
+                exporter.write_frame(
+                    raw_landmarks,
+                    point_ids,
+                )
+                last_valid_points = raw_landmarks
+
+            elif last_valid_points is not None:
+                exporter.write_frame(
+                    last_valid_points,
+                    point_ids,
+                )
+    finally:
+        exporter.close()
 
 
 def main():
@@ -113,19 +97,16 @@ def main():
         description="Vision-IA VFX batch exporter"
     )
 
-    parser.add_argument(
-        "input",
-        help="Dossier contenant les frames source",
-    )
-
-    parser.add_argument(
-        "output",
-        help="Fichier Alembic .abc",
-    )
-
+    parser.add_argument("input", help="Dossier contenant les frames source")
+    parser.add_argument("output", help="Fichier Alembic .abc")
     parser.add_argument(
         "--model",
         default="models/face_landmark.tflite",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=30.0,
     )
 
     args = parser.parse_args()
@@ -134,6 +115,7 @@ def main():
         args.input,
         args.output,
         args.model,
+        args.fps,
     )
 
 
