@@ -2,47 +2,52 @@
 
 Boucle agentique de génération, exécution contrôlée et correction de scripts Python.
 
-## Deux couches
+## Moteur IA : Mistral
 
-### Auto-correcteur générique
+Le fournisseur principal est désormais `MistralProvider`, basé sur le SDK officiel `mistralai`.
 
-`auto_corrector.py` accepte un fournisseur simple `prompt -> texte` et sait extraire du code Markdown.
+Configuration :
 
-### VisionIAAgent JSON strict
-
-`vision_ia_agent.py` impose un protocole beaucoup plus strict :
-
-```json
-{
-  "analyse": "raisonnement bref",
-  "code": "programme Python pur"
-}
-```
-
-Le fournisseur est injecté sous forme :
-
-```python
-def provider(system_prompt: str, prompt: str) -> str:
-    ...
+```bash
+pip install -U mistralai
+export MISTRAL_API_KEY="..."
 ```
 
 Exemple :
 
 ```python
-from vision_ia_agent import VisionIAAgent
+from mistral_provider import create_mistral_agent
 
-agent = VisionIAAgent(
-    provider,
+agent = create_mistral_agent(
+    model="mistral-large-latest",
     max_iterations=5,
     timeout_sec=10,
     memory_mb=256,
+    temperature=0.2,
 )
 
 result = agent.solve("Afficher les 50 premiers nombres de Fibonacci")
 
 if result.success:
     print(result.code)
+else:
+    print(result.message)
 ```
+
+Le SDK Mistral force le mode JSON avec :
+
+```python
+response_format={"type": "json_object"}
+```
+
+Puis `VisionIAAgent` applique une validation stricte supplémentaire : la réponse doit contenir exactement les champs `analyse` et `code`.
+
+## Architecture
+
+- `auto_corrector.py` : sandbox locale bornée et boucle d'auto-correction générique ;
+- `vision_ia_agent.py` : protocole agentique JSON strict, AST, historique et anti-boucle ;
+- `mistral_provider.py` : intégration Mistral ;
+- `test_auto_corrector.py` : tests unitaires hors réseau.
 
 ## Garde-fous
 
@@ -56,15 +61,10 @@ if result.success:
 - empreinte SHA-256 de chaque proposition
 - arrêt anti-boucle si le même code défaillant revient
 - historique structuré des itérations
+- aucune clé API stockée dans le dépôt
 
 Cette couche réduit les risques d'accident mais n'est pas une sandbox de sécurité contre du code hostile. Pour du code non fiable provenant d'un tiers, utiliser un conteneur ou une sandbox OS dédiée.
 
 ## Validation
 
-La CI exécute :
-
-```bash
-python -m py_compile tools/auto_corrector/auto_corrector.py
-cd tools/auto_corrector
-python -m unittest -v
-```
+La CI vérifie la syntaxe de tous les modules et exécute les tests sans appel réseau.
