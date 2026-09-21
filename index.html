@@ -564,7 +564,7 @@ var PROVIDERS = {
   mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest',    cadence:1800 }
 };
 /* Cadence minimale locale ; les quotas réels dépendent du compte. */
-var CADENCE_ETAT = 'vai_cadence_v3';
+var CADENCE_ETAT = 'vai_cadence_v4';
 var PLAFOND_CLE = 'vai_plafond_jetons';
 var FENETRE_JETONS = 60000;
 var ORDRE = ['mistral','groq','cerebras'];
@@ -751,6 +751,7 @@ function xhrJson(url, corps, entetes, delai){
         var err = new Error(libelleHttp(x.status, d));
         err.code = x.status;
         err.attendre = secondesAvantReprise(x);
+        err.detail = d;
         rejeter(err);
       }
     };
@@ -1037,6 +1038,52 @@ function demander(messages, temperature, maxJetons){
   }, estimerJetons(messages, maxJetons || 2400));
 }
 
+/* Chemin dédié au palier Mistral gratuit.
+   Un 429 remonte dès la première tentative afin que le dépouillement puisse
+   réduire la tranche au lieu de renvoyer six fois la même charge. */
+function demanderMistralGratuit(messages, temperature, maxJetons){
+  var generation = generationCoupe;
+  var p = PROVIDERS.mistral;
+  var k = sanitizeKey(trousseau.lire('mistral'));
+  if(!k) return Promise.reject(new Error('Clé Mistral absente.'));
+
+  var estimation = estimerJetons(messages, maxJetons || 500);
+
+  return tourDeRole(p, estimation, generation).then(function(ticket){
+    if(generation !== generationCoupe) throw interrompu();
+
+    return xhrJson(p.url, {
+      model: p.modele,
+      messages: messages,
+      temperature: (temperature == null ? 0.4 : temperature),
+      max_tokens: maxJetons || 500
+    }, {
+      Authorization: 'Bearer ' + k
+    }).then(function(r){
+      var reel = r && r.usage && Number(r.usage.total_tokens);
+      if(reel > 0) corrigerReservation(ticket, reel);
+      var t = r && r.choices && r.choices[0] && r.choices[0].message
+        ? r.choices[0].message.content
+        : '';
+      if(!t) throw new Error('Réponse vide.');
+      apaiser(p);
+      return { texte:t, moteur:p.nom };
+    }).catch(function(e){
+      libererReservation(ticket);
+      if(e && e.code === 429){
+        penaliser(p, e.attendre || 12);
+      }
+      throw e;
+    });
+  });
+}
+
+function demanderPourDepouillement(messages, temperature, maxJetons){
+  return modeMistralGratuit()
+    ? demanderMistralGratuit(messages, temperature, maxJetons)
+    : demander(messages, temperature, maxJetons);
+}
+
 /* Estimation prudente, pas un tokenizer : entrée + sortie maximale réservées. */
 function estimerJetons(messages, sortie){
   return Math.ceil(JSON.stringify(messages).length / 3) + sortie + 128;
@@ -1306,6 +1353,12 @@ function tranches(t, taille){
 }
 
 function tailleTrancheDepouillement(){
+  /* Le palier gratuit Mistral est beaucoup plus sensible au TPM. 18 k signes
+     produisaient des requêtes d'environ 6–7 k jetons et pouvaient prendre un
+     429 dès la première tranche. On démarre volontairement petit ; si Mistral
+     refuse encore, depouillerTempsReel() réduit automatiquement la taille. */
+  if(modeMistralGratuit()) return 4500;
+
   var plafond = plafondJetons();
   if(!(plafond > 0)) return 18000;
 
@@ -1664,6 +1717,8 @@ function demanderDepouillementSansMistral(messages, temperature, maxJetons){
 function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sansMistral){
   var pos = 0;
   var n = baseFiches;
+  var mistralFree = !sansMistral && modeMistralGratuit();
+  var MIN_TRANCHE_FREE = 1200;
 
   function tranche(){
     if(generation !== generationCoupe) return Promise.reject(interrompu());
@@ -1686,7 +1741,9 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
 
     var appel = sansMistral
       ? demanderDepouillementSansMistral(messages, 0.4, 500)
-      : demander(messages, 0.4, 500);
+      : (mistralFree
+          ? demanderMistralGratuit(messages, 0.4, 500)
+          : demander(messages, 0.4, 500));
 
     return appel.then(function(r){
       p.fiches.push('[' + numero + '/' + total + '] ' + r.texte.trim());
@@ -1695,6 +1752,27 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sans
       n++;
       sauver();
       return tranche();
+    }).catch(function(e){
+      if(e && e.coupe) throw e;
+
+      if(mistralFree && e && e.code === 429 && portion.length > MIN_TRANCHE_FREE){
+        var nouvelleTaille = Math.max(MIN_TRANCHE_FREE, Math.floor(portion.length / 2));
+        var texteRestant = lots.slice(pos).join('');
+        var nouveauxLots = tranches(texteRestant, nouvelleTaille);
+
+        lots.splice.apply(lots, [pos, lots.length - pos].concat(nouveauxLots));
+        total = n + nouveauxLots.length;
+        p.tailleTrancheMistral = nouvelleTaille;
+        sauver();
+
+        service(
+          'Mistral Free limite cette charge — tranches réduites à ' +
+          nouvelleTaille + ' signes, reprise automatique.'
+        );
+        return tranche();
+      }
+
+      throw e;
     });
   }
 
@@ -1728,7 +1806,9 @@ function depouiller(i){
 
   p.depouillementOffset = Math.max(0, Math.min(c.texte.length, p.depouillementOffset));
 
-  var taille = tailleTrancheDepouillement();
+  var taille = modeMistralGratuit() && p.tailleTrancheMistral
+    ? Math.max(1200, Math.min(4500, Number(p.tailleTrancheMistral) || 4500))
+    : tailleTrancheDepouillement();
   var reste = c.texte.slice(p.depouillementOffset);
   var lots = tranches(reste, taille);
 
@@ -1811,7 +1891,7 @@ function depouiller(i){
   }).then(function(fiches){
     $('tirage-titre').textContent = 'Synthèse';
     $('tirage-detail').textContent = p.fiches.length + ' tranches à recoudre';
-    return demander([
+    return demanderPourDepouillement([
       { role:'system', content: etat.consigne },
       { role:'user', content:
         'Voici mes fiches de dépouillement de « ' + p.nom +' », dans l\'ordre. ' +
@@ -1858,7 +1938,7 @@ function recoudreFiches(p, generation){
         if(garde){ sorties.push(garde.texte); return; }
         $('tirage-detail').textContent = 'Synthèse intermédiaire ' + (profondeur+1) + ' — groupe ' + (i+1) + '/' + groupes.length;
         $('ecriture-quoi').textContent = $('tirage-detail').textContent;
-        return demander([
+        return demanderPourDepouillement([
           {role:'system', content:'Résume fidèlement des fiches de lecture. Ne crée aucun événement absent des fiches.'},
           {role:'user', content:'Condense ces fiches en 180 mots maximum. Préserve chronologie, noms, causalité, fin du récit, lieux et contraintes de tournage.\n\n' + entree}
         ], 0.3, 450).then(function(r){
