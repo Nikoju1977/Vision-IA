@@ -564,7 +564,7 @@ var PROVIDERS = {
   mistral:  { nom:'Mistral',  url:'https://api.mistral.ai/v1/chat/completions',      cle:'vai_k_mistral',  modele:'mistral-small-latest',    cadence:1800 }
 };
 /* Cadence minimale locale ; les quotas réels dépendent du compte. */
-var CADENCE_ETAT = 'vai_cadence_v2';
+var CADENCE_ETAT = 'vai_cadence_v3';
 var PLAFOND_CLE = 'vai_plafond_jetons';
 var FENETRE_JETONS = 60000;
 var ORDRE = ['mistral','groq','cerebras'];
@@ -977,9 +977,9 @@ function chaine(tenter, estimation){
   function essai(reprises){
     if(i >= dispo.length) return Promise.reject(dernier || new Error('Tous les moteurs ont refusé.'));
     var p = PROVIDERS[dispo[i].id], k = dispo[i].k;
-    /* Un quota/minute exige une vraie fenêtre de repos. Six reprises bornées
-       puis relais éventuel ; un quota persistant ne boucle jamais sans fin. */
-    var ATTENTES = [60, 90, 90, 90, 90, 90];
+    /* Reprises bornées. Les délais sont courts et un autre fournisseur,
+       lorsqu'il existe, prend immédiatement le relais après un 429. */
+    var ATTENTES = [5, 10, 20, 30, 45, 60];
     return tourDeRole(p, estimation, generation).then(function(ticket){
       if(generation !== generationCoupe) throw interrompu();
       return tenter(p, k, ticket);
@@ -991,12 +991,23 @@ function chaine(tenter, estimation){
       if(e && e.coupe) throw e;                 /* couper ne bascule pas */
       dernier = e;
       if(e && e.code === 429 && reprises >= ATTENTES.length){
-        penaliser(p, e.attendre || 90);
+        penaliser(p, e.attendre || 60);
         e.message += ' — quota persistant : vérifiez les limites de votre compte avant de reprendre.';
       }
       var saturable = e && (e.code === 429 || e.code >= 500);
+
+      /* Un 429 signifie quota/cadence, pas panne logique. S'il existe un autre
+         fournisseur configuré, on ne bloque plus 60/90 s : on bascule tout de suite. */
+      if(e && e.code === 429 && i + 1 < dispo.length){
+        penaliser(p, e.attendre || 5);
+        i++;
+        service(p.nom + ' limité — bascule immédiate sur ' + PROVIDERS[dispo[i].id].nom + '.');
+        return essai(0);
+      }
+
       if(saturable && reprises < ATTENTES.length){
-        var s = penaliser(p, e.attendre || ATTENTES[reprises]);
+        var fallback = e && e.code === 429 ? [5, 10, 20, 30, 45, 60] : [3, 9, 20, 30, 45, 60];
+        var s = penaliser(p, e.attendre || fallback[reprises]);
         service(p.nom + ' sature, reprise dans ' + Math.round(s) + ' s.');
         return essai(reprises + 1);
       }
@@ -1433,6 +1444,7 @@ function creerBatchDepouillement(p, lots, baseFiches, baseOffset, total, genre, 
     return {
       custom_id: String(numero),
       body: {
+        model: PROVIDERS.mistral.modele,
         max_tokens: 500,
         temperature: 0.4,
         messages: [
@@ -1561,14 +1573,87 @@ function attendreBatchDepouillement(p, generation){
         throw new Error('Batch Mistral ' + statut + details);
       }
 
-      return patienter(3000).then(poll);
+      return patienter(10000).then(poll);
+    }).catch(function(e){
+      if(e && e.coupe) throw e;
+      if(e && e.code === 429){
+        var attente = Math.max(2, Number(e.attendre) || 5);
+        $('ecriture-quoi').textContent =
+          'Mistral Batch — API occupée, vérification dans ' + Math.ceil(attente) + ' s';
+        return patienter(attente * 1000).then(poll);
+      }
+      throw e;
     });
   }
 
   return poll();
 }
 
-function depouillerTempsReel(p, lots, baseFiches, total, genre, generation){
+function clesTempsReelSansMistral(){
+  return cles().filter(function(v){ return v.id !== 'mistral'; });
+}
+
+function demanderDepouillementSansMistral(messages, temperature, maxJetons){
+  var generation = generationCoupe;
+  var dispo = clesTempsReelSansMistral();
+  if(!dispo.length){
+    return Promise.reject(new Error(
+      'Batch Mistral indisponible et aucun moteur de secours (Groq/Cerebras) n\'est configuré. ' +
+      'Vision-IA ne relancera pas Mistral temps réel pour éviter une nouvelle attente de 90 s.'
+    ));
+  }
+
+  var i = 0;
+  var dernier = null;
+  var estimation = estimerJetons(messages, maxJetons || 500);
+
+  function essai(){
+    if(i >= dispo.length){
+      return Promise.reject(dernier || new Error('Tous les moteurs de secours ont refusé.'));
+    }
+
+    var p = PROVIDERS[dispo[i].id];
+    var k = dispo[i].k;
+
+    return tourDeRole(p, estimation, generation).then(function(ticket){
+      if(generation !== generationCoupe) throw interrompu();
+
+      return xhrJson(p.url, {
+        model: p.modele,
+        messages: messages,
+        temperature: (temperature == null ? 0.4 : temperature),
+        max_tokens: maxJetons || 500
+      }, {
+        Authorization: 'Bearer ' + k
+      }).then(function(r){
+        var reel = r && r.usage && Number(r.usage.total_tokens);
+        if(reel > 0) corrigerReservation(ticket, reel);
+        var t = r && r.choices && r.choices[0] && r.choices[0].message
+          ? r.choices[0].message.content
+          : '';
+        if(!t) throw new Error('Réponse vide.');
+        apaiser(p);
+        return { texte:t, moteur:p.nom };
+      }).catch(function(e){
+        libererReservation(ticket);
+        throw e;
+      });
+    }).catch(function(e){
+      if(e && e.coupe) throw e;
+      dernier = e;
+      i++;
+      if(i < dispo.length){
+        service('Secours immédiat : ' + PROVIDERS[dispo[i].id].nom + '.');
+        return essai();
+      }
+      throw e;
+    });
+  }
+
+  return essai();
+}
+
+function depouillerTempsReel(p, lots, baseFiches, total, genre, generation, sansMistral){
   var pos = 0;
   var n = baseFiches;
 
@@ -1586,10 +1671,16 @@ function depouillerTempsReel(p, lots, baseFiches, total, genre, generation){
 
     var portion = lots[pos];
 
-    return demander([
+    var messages = [
       { role:'system', content:'Tu es Vision-IA, réalisateur. Tu lis un document de travail et tu en rends compte sans le paraphraser mot à mot.' },
       { role:'user', content: quoi + '\n\n--- PORTION ' + numero + '/' + total + ' ---\n' + portion }
-    ], 0.4, 500).then(function(r){
+    ];
+
+    var appel = sansMistral
+      ? demanderDepouillementSansMistral(messages, 0.4, 500)
+      : demander(messages, 0.4, 500);
+
+    return appel.then(function(r){
       p.fiches.push('[' + numero + '/' + total + '] ' + r.texte.trim());
       p.depouillementOffset += portion.length;
       pos++;
@@ -1666,12 +1757,25 @@ function depouiller(i){
       generation
     ).catch(function(e){
       if(e && e.coupe) throw e;
-      /* CORS, batch indisponible ou compte non éligible : aucun texte n'est
-         perdu, on revient automatiquement au pipeline multi-fournisseurs. */
+
+      var detail = e && e.message ? e.message : 'erreur inconnue';
       p.batchMistral = null;
+      p.dernierErreurBatch = detail;
       sauver();
-      service('Batch Mistral indisponible — reprise en mode temps réel sécurisé.');
-      return depouillerTempsReel(p, lots, n, total, p.genre, generation);
+
+      if(clesTempsReelSansMistral().length){
+        service(
+          'Batch Mistral indisponible (' + detail + ') — bascule immédiate sur un moteur de secours.'
+        );
+        return depouillerTempsReel(
+          p, lots, n, total, p.genre, generation, true
+        );
+      }
+
+      throw new Error(
+        'Batch Mistral indisponible : ' + detail +
+        '. Aucun moteur de secours configuré. Aucune attente de 90 s ne sera relancée.'
+      );
     });
   } else {
     travail = depouillerTempsReel(p, lots, n, total, p.genre, generation);
