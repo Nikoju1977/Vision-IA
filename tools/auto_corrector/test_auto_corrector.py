@@ -3,6 +3,7 @@ import unittest
 
 from auto_corrector import auto_correct, extract_code, run_generated_code
 from vision_ia_agent import VisionIAAgent
+from openai_provider import OpenAIProvider, VISION_IA_RESPONSE_SCHEMA, create_openai_agent
 
 
 class AutoCorrectorTests(unittest.TestCase):
@@ -109,3 +110,83 @@ class VisionIAAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OpenAIProviderTests(unittest.TestCase):
+    def test_structured_outputs_request(self):
+        class FakeResponse:
+            output_text = json.dumps({
+                "analyse": "Diagnostic bref.",
+                "code": "print(7)",
+            })
+
+        class FakeResponses:
+            def __init__(self):
+                self.kwargs = None
+
+            def create(self, **kwargs):
+                self.kwargs = kwargs
+                return FakeResponse()
+
+        class FakeClient:
+            def __init__(self):
+                self.responses = FakeResponses()
+
+        client = FakeClient()
+        provider = OpenAIProvider(model="gpt-test", client=client)
+        raw = provider("SYSTEM", "PROMPT")
+
+        self.assertEqual(json.loads(raw)["code"], "print(7)")
+        self.assertEqual(client.responses.kwargs["model"], "gpt-test")
+        self.assertEqual(client.responses.kwargs["instructions"], "SYSTEM")
+        self.assertEqual(client.responses.kwargs["input"], "PROMPT")
+
+        fmt = client.responses.kwargs["text"]["format"]
+        self.assertEqual(fmt["type"], "json_schema")
+        self.assertTrue(fmt["strict"])
+        self.assertFalse(fmt["schema"]["additionalProperties"])
+        self.assertEqual(set(fmt["schema"]["required"]), {"analyse", "code"})
+
+    def test_factory_builds_agent_without_network(self):
+        class FakeResponse:
+            output_text = json.dumps({
+                "analyse": "OK.",
+                "code": "print(9)",
+            })
+
+        class FakeResponses:
+            def create(self, **_kwargs):
+                return FakeResponse()
+
+        class FakeClient:
+            responses = FakeResponses()
+
+        agent = create_openai_agent(
+            model="gpt-test",
+            max_iterations=2,
+            timeout_sec=2,
+            client=FakeClient(),
+        )
+        result = agent.solve("Afficher 9")
+        self.assertTrue(result.success)
+        self.assertIn("print(9)", result.code or "")
+
+    def test_schema_is_strict(self):
+        self.assertEqual(
+            VISION_IA_RESPONSE_SCHEMA,
+            {
+                "type": "object",
+                "properties": {
+                    "analyse": {
+                        "type": "string",
+                        "description": "Diagnostic bref de la solution ou de l'erreur identifiée, sans chaîne de raisonnement détaillée.",
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": "Programme Python complet, sans balises Markdown.",
+                    },
+                },
+                "required": ["analyse", "code"],
+                "additionalProperties": False,
+            },
+        )
