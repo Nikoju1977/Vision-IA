@@ -46,7 +46,7 @@ Le dépouillement est reprenable. Chaque fiche réussie est sauvegardée immédi
 
 Routage actuel :
 
-- si **Groq** est configuré et qu'il reste plus de 60 000 caractères, le document long est envoyé directement vers Groq par tranches d'environ 9 000 caractères ;
+- si **Groq** est configuré et qu'il reste plus de 60 000 caractères, le document long est traité en priorité par Groq par tranches d'environ 9 000 caractères, avec repli automatique vers Mistral si Groq est indisponible ;
 - sinon, avec Mistral, le mode économique travaille par tranches d'environ 3 000 caractères et peut basculer sur Groq ;
 - sans Mistral, Groq/Cerebras assurent le secours ;
 - un `429` ou un `5xx` déclenche refroidissement, reprise bornée et bascule vers un moteur disponible ;
