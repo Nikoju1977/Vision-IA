@@ -1,0 +1,25 @@
+name: Vision-IA Auto-Corrector QA
+
+on:
+  push:
+    paths:
+      - "tools/auto_corrector/**"
+      - ".github/workflows/auto-corrector-ci.yml"
+  pull_request:
+    paths:
+      - "tools/auto_corrector/**"
+      - ".github/workflows/auto-corrector-ci.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Syntax
+        run: python -m py_compile tools/auto_corrector/auto_corrector.py
+      - name: Unit tests
+        working-directory: tools/auto_corrector
+        run: python -m unittest -v
