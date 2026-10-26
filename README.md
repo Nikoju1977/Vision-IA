@@ -1,5 +1,8 @@
 # Vision-IA
 
+> **Projet signature · 01/06 · CINÉMA** — [Étude de projet : problème, choix techniques et limites](https://github.com/Nikoju1977/Nikoju1977/blob/main/SHOWCASE.md) · [Portfolio Studio Niko Design](https://github.com/Nikoju1977).
+
+
 Vision-IA est un réalisateur agentique de cinéma, pensé pour accompagner un projet du pitch au dossier de production sans serveur applicatif ni chaîne de build.
 
 L'application tient dans `index.html` et fonctionne comme une PWA. Elle lit des documents de travail, construit le contexte du film, produit une note d'intention, un découpage technique, un conducteur, un parti pris d'image, des directives de production et un dossier exportable.
