@@ -1,0 +1,32 @@
+name: Vision-IA MCP QA
+
+on:
+  push:
+    paths:
+      - 'mcp/**'
+      - '.agents/skills/vision-ia/**'
+      - '.github/workflows/mcp-ci.yml'
+  pull_request:
+    paths:
+      - 'mcp/**'
+      - '.agents/skills/vision-ia/**'
+      - '.github/workflows/mcp-ci.yml'
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Vérifier le script et les fonctions locales
+        working-directory: mcp
+        run: |
+          npm run check
+          npm test
+      - name: Installer les dépendances du SDK MCP
+        working-directory: mcp
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          node --input-type=module -e "import('@modelcontextprotocol/server').then(x => { if (!x.McpServer) process.exit(1) })"
