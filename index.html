@@ -2643,8 +2643,52 @@ function adopterTitreDepuisNote(){
   if($('f-titre')) $('f-titre').value = titre;
 }
 
+/* Trame véritablement locale : sans clé, sans requête IA et sans faits inventés.
+   Elle permet de préparer, copier et exporter une intention de réalisation. */
+function ecrireTrameLocale(){
+  var titre = $('f-titre').value.trim() || etat.titre || 'Film sans titre';
+  var genre = $('f-genre').value.trim() || etat.genre || 'à préciser';
+  var pitch = $('f-message').value.trim();
+  if(!pitch){
+    service('Sans clé IA, écrivez un pitch dans le Plateau pour construire la trame locale.', true);
+    onglet('plateau');
+    $('f-message').focus();
+    return;
+  }
+  var lignes = [
+    'NOTE D’INTENTION — TRAME DE TRAVAIL LOCALE (SANS IA)',
+    '',
+    'Projet : ' + titre,
+    'Genre : ' + genre,
+    '',
+    '1. SUJET ET NÉCESSITÉ DU FILM',
+    'Point de départ fourni par le réalisateur :',
+    pitch,
+    '',
+    'Pourquoi ce sujet mérite-t-il un film ?',
+    '[À compléter personnellement : le regard que je veux partager et l’émotion recherchée.]',
+    '',
+    '2. PARTI PRIS DE MISE EN SCÈNE',
+    '[À compléter : point de vue, distance à l’égard des personnages, rythme, choix des lieux et dispositifs de tournage.]',
+    '',
+    '3. IMAGE ET SON',
+    '[À compléter : lumière, palette, cadre, mouvements, matière sonore, silence, musique et ambiance.]',
+    '',
+    '4. DIRECTION DES PERSONNES FILMÉES OU DES ACTEURS',
+    '[À compléter : relation à la caméra, méthodes de travail, intentions de jeu ou approche documentaire.]',
+    '',
+    'À vérifier : les choix et faits ci-dessus doivent venir du projet réel. Cette trame ne constitue pas un texte généré par une intelligence artificielle.'
+  ];
+  etat.titre = titre;
+  etat.genre = genre;
+  etat.note = lignes.join('\n');
+  $('sortie-note').textContent = etat.note;
+  marquerPhases(); rendreDossier(); sauver();
+  service('Trame locale créée et enregistrée, sans clé et sans appel réseau.');
+}
 function ecrireNote(){
   if(occupe) return;
+  if(!cles().length){ ecrireTrameLocale(); return; }
   var m = socle({ sansNote:true });
   m.push({ role:'user', content:
     'Rédige la note d\'intention du film. Quatre parties nettes, sans titres numérotés : le sujet et pourquoi il vaut d\'être filmé ; ' +
