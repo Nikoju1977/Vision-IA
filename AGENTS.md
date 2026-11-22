@@ -82,7 +82,9 @@ l'ancienne coquille.
 Ne pas réintroduire de réécriture du HTML dans le service worker : `rep.text()`
 sur le document supprime le streaming de 90 ko.
 
-## Avant de livrer
+## Contrôles possibles — uniquement sur demande explicite du propriétaire
+
+Ne pas lancer de campagne de tests ni de vérification d'exécution par défaut. Les points ci-dessous sont une procédure facultative, et aucun succès ne doit être revendiqué sans exécution réelle.
 
 1. `node --check` sur chaque bloc de script extrait, et sur `sw.js`.
 2. Zéro identifiant DOM dupliqué.
@@ -97,3 +99,9 @@ GitHub Pages sur la branche `main`, racine. Pousser par l'API Contents
 (`GET` du `sha`, puis `PUT`). Les jetons classiques à portée `repo` fonctionnent ;
 les jetons à portée fine échouent souvent. Révoquer le jeton immédiatement
 après usage.
+
+## Modern Web Guidance — complément (2026-11-22)
+
+Consulter https://github.com/GoogleChrome/modern-web-guidance pour les meilleures pratiques de HTML sémantique, focus clavier, UI mobile, accessibilité et compatibilité navigateurs. Dans un agent disposant de Node.js : `npx modern-web-guidance@latest search "mobile responsive navigation"`, puis `retrieve` avec l'identifiant réellement retourné. Les règles spécifiques ci-dessus **restent prioritaires** : single-file, XHR, coffre et cooldown, formats cinéma.
+
+Distinguer toujours code écrit, commit GitHub, déploiement GitHub Pages et fonctionnement vérifié. Ne jamais supposer qu'un déploiement ou qu'un test a réussi.
