@@ -7,6 +7,54 @@ Vision-IA est un réalisateur agentique de cinéma, pensé pour accompagner un p
 
 L'application tient dans `index.html` et fonctionne comme une PWA. Elle lit des documents de travail, construit le contexte du film, produit une note d'intention, un découpage technique, un conducteur, un parti pris d'image, des directives de production et un dossier exportable.
 
+**STUDIO NIKO DESIGN** · Build smart. Stay lightweight. Create without limits.
+
+[![UI](https://img.shields.io/badge/UI-Vanilla_JS-F7DF1E)](index.html) [![Vault](https://img.shields.io/badge/key_vault-AES--256--GCM-00897B)](index.html) [![License](https://img.shields.io/badge/license-restricted-lightgrey)](LICENSE.md)
+
+> [Insérer ici un GIF de démonstration / Insert demo GIF here]
+
+## Pourquoi ce projet ?
+
+Relier l'analyse documentaire et la direction artistique d'un film à un dossier de production cohérent, sans imposer de serveur applicatif. Les calculs de conducteur et la discipline des sources sont distincts des propositions créatives des modèles. Vision-IA est un outil de préproduction, pas un moteur local de génération vidéo.
+
+## Architecture & algorithmes
+
+```mermaid
+flowchart TD
+ A[Script / PDF / DOCX / scouting] --> B[Local extraction and document register]
+ B --> C[Source context / resumable chunks]
+ C --> D[Remote text models]
+ D --> E[Reading notes / shot list / creative proposals]
+ B --> F[Local sequence parsing]
+ F --> G[Schedule and location grouping]
+ E --> H[Storyboard prompts]
+ H --> I[Remote Pollinations images]
+ E --> J[Markdown / JSON / print]
+ G --> J
+ B --> K[Local IndexedDB]
+ L[Encrypted API key vault] --> D
+```
+
+| Fonction dans [index.html](index.html) | Implémentation constatée |
+| --- | --- |
+| Extraction documentaire | pdf.js 3.4.120 et Mammoth 1.6.0 (CDN) ; plafond de 400 pages PDF texte et 900 000 caractères par pièce. Pas d'OCR généralisé démontré. |
+| `contexte`, `socle` | Assemblage de la fiche projet et des extraits ou notes de lecture ; instructions de séparation faits, hypothèses et propositions. |
+| `strategieDepouillement`, `tailleTrancheDepouillement` | Routage adaptatif, tranches d'environ 3 000 ou 9 000 caractères et reprise par offsets. |
+| `creerBatchDepouillement` | Chemin batch Mistral présent : envoi de portions et suivi d'un job distant, soumis aux conditions et tarifs du fournisseur. |
+| `sequencesDuFilm`, `rendreConducteur` | Calcul local du conducteur à partir des en-têtes et des séquences identifiées. |
+| `tirerStoryboard` | Jusqu'à 24 vues, URL Pollinations contenant le prompt, demande 1024×576 et seed par plan. Pas de moteur de diffusion local. |
+| [sw.js](sw.js) | Cache applicatif et ressources de lecture ; les appels distants restent soumis au réseau. |
+
+### Performances, fidélité et limites
+
+Les plafonds de caractères, pages et images sont des limites programmées, pas un benchmark. Un texte long peut être tronqué ; l'extraction PDF ne garantit pas l'ordre de lecture, et les instructions de fidélité n'empêchent pas les hallucinations. Un découpage verrouillé à une source ne démontre pas la justesse de toutes les propositions. Les modèles configurés (Mistral, Groq, Cerebras, Ministral et Pollinations) sont des connecteurs externes ; leur disponibilité, coût, compatibilité et qualité ne sont pas vérifiés pour cette révision. Aucun rendu vidéo, codec, mixage audio ou moteur de diffusion local n'est revendiqué.
+
+### Sécurité des données de production
+
+Le coffre de clés utilise AES-256-GCM et PBKDF2-SHA-256 (310 000 itérations), sel de 16 octets, IV de 12 octets et phrase d'au moins 8 caractères. Les anciennes clés en clair peuvent être reprises en mémoire ; la purge intervient lors du scellement réussi du coffre. Il faut donc vérifier les migrations, et ne pas promettre une absence absolue de secrets historiques. Le coffre ne chiffre pas les corps de documents IndexedDB, les métadonnées de projet ni les exports JSON/Markdown. Les extraits de scénarios, notes, images et informations de production peuvent être transmis aux fournisseurs choisis ou intégrés aux URLs de storyboard ; le mode batch envoie des portions de documents à Mistral. Obtenir les droits et accords nécessaires avant de transmettre un scénario inédit, des rushes ou des données personnelles. La protection au repos ne couvre pas une session compromise.
+
+Aucun benchmark de dépouillement, test d'inférence, test sur appareil physique, vérification de tarifs ou audit indépendant n'a été réalisé pour cette révision documentaire.
+
 ## Phases de travail
 
 1. **Plateau** — dialogue avec Vision-IA et classeur du film.
@@ -75,7 +123,7 @@ Les quotas réels dépendent du compte et du fournisseur ; l'application ne supp
 
 Les clés API passent toutes par `sanitizeKey()`.
 
-Elles ne sont pas conservées en clair :
+Les nouvelles clés sont conservées en mémoire ou dans le coffre chiffré ; les anciennes traces en clair doivent être migrées :
 
 - coffre AES-256-GCM ;
 - clé dérivée par PBKDF2-SHA256, 310 000 tours ;
@@ -140,12 +188,36 @@ La CI GitHub vérifie notamment :
 - nettoyage de l'impression ;
 - non-régression des anciens délais fixes.
 
-## Installation
+## Quickstart / Démarrage rapide
 
-Ouvrir `index.html` directement ou utiliser GitHub Pages :
+Servir le dossier complet avec `python3 -m http.server 8000`, ouvrir http://localhost:8000/ (Web Crypto et PWA nécessitent un contexte sécurisé), ou utiliser GitHub Pages :
 
 https://nikoju1977.github.io/Vision-IA/
 
 ---
 
 Studio Niko Design
+
+
+## Roadmap & contribution
+
+Propositions non terminées :
+
+- [ ] Tester extraction et découpage sur scénarios synthétiques, documents tronqués et PDF complexes.
+- [ ] Mesurer débit, consommation de jetons, coût observé et reprise après interruption avec comptes de test autorisés.
+- [ ] Vérifier la fidélité factuelle et les identifiants de source sur un jeu de référence annoté.
+- [ ] Ajouter des contrôles de minimisation avant envoi et de chiffrement des documents de production ; vérifier la migration des clés historiques.
+- [ ] Tester les exports et le storyboard, sans promettre la cohérence visuelle des images générées.
+
+**Première contribution / `good first issue` (label proposé, non créé ici) :** Proposer un mini-scénario fictif contenant des en-têtes ambigus et le conducteur attendu.
+
+[Issues](https://github.com/Nikoju1977/Vision-IA/issues) : retours reproductibles bienvenus dans le cadre des droits existants. Ne pas publier de clés, médias privés ou documents confidentiels.
+
+## English overview
+
+Vision-IA is a filmmaking preproduction workspace, not a video generator. It extracts documents locally, builds source-linked context, routes optional remote LLM requests and creates a local scene schedule plus storyboard prompts for Pollinations. The API-key vault uses AES-GCM/PBKDF2, but documents and project exports are not encrypted by it. Legacy cleartext keys may remain until successful vault sealing. Source-discipline prompts reduce but do not eliminate hallucinations. No new provider, benchmark or production tests were run.
+
+
+## Licence & auteur / License & author
+
+[Notice de droits](LICENSE.md) © 2026 Studio Niko Design (Nikoju1977). Tous droits réservés pour les contributions originales concernées. Publication publique ≠ licence open source ; les droits et licences tiers demeurent applicables. Aucun fichier de licence n'a été modifié.
