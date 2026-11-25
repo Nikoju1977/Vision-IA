@@ -11,7 +11,7 @@ L'application tient dans `index.html` et fonctionne comme une PWA. Elle lit des 
 
 [![UI](https://img.shields.io/badge/UI-Vanilla_JS-F7DF1E)](index.html) [![Vault](https://img.shields.io/badge/key_vault-AES--256--GCM-00897B)](index.html) [![License](https://img.shields.io/badge/license-restricted-lightgrey)](LICENSE.md)
 
-> [Insérer ici un GIF de démonstration / Insert demo GIF here]
+> Démonstration : scénario fictif recommandé ; aucun GIF de démonstration n'est revendiqué.
 
 ## Pourquoi ce projet ?
 
@@ -198,6 +198,24 @@ https://nikoju1977.github.io/Vision-IA/
 
 Studio Niko Design
 
+
+## Qualification proposée — préproduction cinématographique
+
+**Objectif :** mesurer la fidélité documentaire et la reproductibilité du conducteur, sans confondre création artistique et faits issus du scénario.
+
+| Contrôle proposé (non exécuté) | Preuve attendue |
+| --- | --- |
+| Extraction | Comparer le texte extrait à un scénario fictif de référence ; signaler troncature et pages non lisibles |
+| Conducteur | Comparer séquences, INT/EXT et décors au scénario annoté |
+| Découpage | Vérifier la liaison à la séquence choisie et le refus de mélange entre sources |
+| Reprise | Simuler une interruption et vérifier la progression sauvegardée, sans doublon ni perte |
+| Storyboard | Distinguer prompt, image distante effectivement reçue et erreur ; vérifier les droits et la continuité visuelle |
+| Dossier | Contrôler la présence des phases et sources dans Markdown, JSON et impression |
+| Confidentialité | Examiner la migration des clés et les données transmises aux fournisseurs ; utiliser uniquement un scénario fictif |
+
+Les instructions de fidélité ne garantissent pas l'exactitude des réponses du modèle. Les images distantes ne constituent pas des plans vidéo générés. Les plafonds programmés ne sont pas des performances mesurées. Aucune génération, extraction en conditions réelles, vérification de tarifs ou publication de production n'a été exécutée pour cette révision.
+
+**English:** Proposed checks cover source fidelity, local scene scheduling, resumable document processing, storyboard availability, dossier exports and key/data boundaries. These are test objectives, not evidence of successful execution.
 
 ## Roadmap & contribution
 
