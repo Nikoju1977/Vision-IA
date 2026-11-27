@@ -1,0 +1,19 @@
+{
+  "name": "vision-ia-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Serveur MCP local pour les outils de préparation cinématographique Vision-IA",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check server.mjs && node --check core.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.0.0"
+  }
+}
